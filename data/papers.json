@@ -1,0 +1,44 @@
+[
+  {
+    "title": "Lift, Splat, Shoot: Encoding Images from Arbitrary Camera Rigs by Implicitly Unprojecting to 3D",
+    "abstract": "A camera-only method that lifts image features into 3D and splats them into a bird's-eye-view representation for downstream perception tasks.",
+    "year": 2020,
+    "citation_count": 1800,
+    "link": "https://arxiv.org/abs/2008.05711"
+  },
+  {
+    "title": "BEVDet: High-performance Multi-camera 3D Object Detection in Bird-Eye-View",
+    "abstract": "A camera-based BEV detection framework focusing on efficient view transformation and strong 3D detection performance.",
+    "year": 2021,
+    "citation_count": 850,
+    "link": "https://arxiv.org/abs/2112.11790"
+  },
+  {
+    "title": "BEVFormer: Learning Bird's-Eye-View Representation from Multi-Camera Images via Spatiotemporal Transformers",
+    "abstract": "A transformer-based model that aggregates spatial and temporal information from multi-camera images to produce BEV features.",
+    "year": 2022,
+    "citation_count": 1600,
+    "link": "https://arxiv.org/abs/2203.17270"
+  },
+  {
+    "title": "VoxelNet: End-to-End Learning for Point Cloud Based 3D Object Detection",
+    "abstract": "A LiDAR-focused method that learns feature representation directly from point clouds using voxel feature encoding.",
+    "year": 2018,
+    "citation_count": 5000,
+    "link": "https://arxiv.org/abs/1711.06396"
+  },
+  {
+    "title": "CenterPoint: Center-based 3D Object Detection and Tracking",
+    "abstract": "A center-based framework for 3D object detection and tracking, commonly used in LiDAR-based autonomous driving systems.",
+    "year": 2020,
+    "citation_count": 2000,
+    "link": "https://arxiv.org/abs/2006.11275"
+  },
+  {
+    "title": "TransFusion: Robust LiDAR-Camera Fusion for 3D Object Detection with Transformers",
+    "abstract": "A fusion framework that combines LiDAR and camera features through transformer mechanisms for robust 3D detection.",
+    "year": 2022,
+    "citation_count": 780,
+    "link": "https://arxiv.org/abs/2203.11496"
+  }
+]

@@ -1,0 +1,27 @@
+[
+  {
+    "field": "BEV Perception",
+    "branch": "Camera-based BEV",
+    "seed_papers": [
+      "Lift, Splat, Shoot",
+      "BEVDet",
+      "BEVFormer"
+    ]
+  },
+  {
+    "field": "BEV Perception",
+    "branch": "LiDAR-based BEV",
+    "seed_papers": [
+      "VoxelNet",
+      "CenterPoint"
+    ]
+  },
+  {
+    "field": "BEV Perception",
+    "branch": "Multi-modal Fusion BEV",
+    "seed_papers": [
+      "TransFusion",
+      "LiDAR-Camera fusion"
+    ]
+  }
+]
