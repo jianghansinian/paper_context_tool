@@ -1,3 +1,5 @@
+import hashlib
+import pickle
 from typing import Optional
 
 import numpy as np
@@ -7,6 +9,7 @@ from sklearn.feature_extraction.text import HashingVectorizer
 from config import (
     EMBEDDING_API_KEY,
     EMBEDDING_BASE_URL,
+    EMBEDDINGS_CACHE_PATH,
     EMBEDDING_MODEL,
     ENABLE_LOCAL_EMBEDDING_FALLBACK,
 )
@@ -66,3 +69,49 @@ def get_embedding(text: str, client: Optional[OpenAI]) -> np.ndarray:
             "EMBEDDING_MODEL=text-embedding-3-small."
         ) from exc
     return np.array(response.data[0].embedding, dtype=float)
+
+
+def _text_for_embedding(paper: dict) -> str:
+    return f"{paper.get('title', '')}\n{paper.get('abstract', '')}".strip()
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _load_cache() -> dict:
+    if not EMBEDDINGS_CACHE_PATH.exists():
+        return {}
+    try:
+        with EMBEDDINGS_CACHE_PATH.open("rb") as file:
+            data = pickle.load(file)
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_cache(cache: dict) -> None:
+    EMBEDDINGS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with EMBEDDINGS_CACHE_PATH.open("wb") as file:
+        pickle.dump(cache, file)
+
+
+def generate_embeddings(papers: list, client: Optional[OpenAI]) -> np.ndarray:
+    cache = _load_cache()
+    vectors = []
+    updated = False
+
+    for paper in papers:
+        text = _text_for_embedding(paper)
+        key = _hash_text(text)
+        vec = cache.get(key)
+        if vec is None:
+            vec = get_embedding(text, client).astype(float)
+            cache[key] = vec
+            updated = True
+        vectors.append(np.array(vec, dtype=float))
+
+    if updated:
+        _save_cache(cache)
+
+    return np.vstack(vectors) if vectors else np.empty((0, 0), dtype=float)

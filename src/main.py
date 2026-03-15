@@ -1,101 +1,74 @@
-import json
-from urllib.parse import urlparse
-
-import requests
-from requests import RequestException
-
-from classifier import build_branch_embeddings, classify_paper
 from config import (
-    BRANCHES_PATH,
-    EMBEDDING_BASE_URL,
-    ENABLE_LOCAL_EMBEDDING_FALLBACK,
     OUTPUT_MARKDOWN_PATH,
-    PAPERS_PATH,
-    TOP_K_PAPERS,
 )
-from embedding import build_embedding_client
+from crawler import fetch_papers
+from embedding import build_embedding_client, generate_embeddings
+from cluster import cluster_embeddings
+from branch_discovery import discover_branches
+from citation_graph import build_citation_graph, export_graph
+from key_paper import rank_key_papers
 from markdown_export import export_markdown
 from timeline import build_timeline
 
 
-def load_data():
-    with PAPERS_PATH.open(encoding="utf-8") as file:
-        papers = json.load(file)
-
-    with BRANCHES_PATH.open(encoding="utf-8") as file:
-        branches = json.load(file)
-
-    return papers, branches
-
-
-def build_field_map(papers, branches, client):
-    field_map = {}
-    branch_embeddings = build_branch_embeddings(branches, client)
-
-    for paper in papers:
-        branch = classify_paper(paper, branches, branch_embeddings, client)
-        if branch is None:
-            continue
-
-        field = branch["field"]
-        branch_name = branch["branch"]
-        field_map.setdefault(field, {})
-        field_map[field].setdefault(branch_name, {"papers": []})
-        field_map[field][branch_name]["papers"].append(paper)
-
-    for field in field_map:
-        for branch_name in field_map[field]:
-            papers_in_branch = field_map[field][branch_name]["papers"]
-            papers_sorted = sorted(
-                papers_in_branch,
-                key=lambda paper: paper["citation_count"],
-                reverse=True,
-            )
-
-            key_papers = papers_sorted[:TOP_K_PAPERS]
-            timeline = build_timeline(key_papers)
-            field_map[field][branch_name]["key_papers"] = key_papers
-            field_map[field][branch_name]["timeline"] = timeline
-
-    return field_map
-
-
-def check_embedding_api_reachable(base_url):
-    """Network preflight: endpoint reachable even if auth is invalid."""
-    parsed = urlparse(base_url)
-    if not parsed.scheme or not parsed.netloc:
-        return False, "EMBEDDING_BASE_URL 格式无效"
-
-    try:
-        response = requests.get(base_url, timeout=3)
-        return True, f"HTTP {response.status_code}"
-    except RequestException as exc:
-        return False, str(exc)
+def _attach_embeddings(papers, embedding_matrix):
+    for idx, paper in enumerate(papers):
+        paper["_embedding"] = embedding_matrix[idx]
 
 
 def main():
-    papers, branches = load_data()
-    client = build_embedding_client()
-    if client is not None:
-        reachable, detail = check_embedding_api_reachable(EMBEDDING_BASE_URL)
-        if not reachable:
-            print(f"Embedding API 不可达: {detail}")
-            print("请配置代理后重试（例如设置 HTTPS_PROXY/HTTP_PROXY）。")
-            if ENABLE_LOCAL_EMBEDDING_FALLBACK:
-                print("已自动切换到本地 embedding fallback。")
-                client = None
-            else:
-                return
+    import sys
 
-    try:
-        field_map = build_field_map(papers, branches, client)
-    except ValueError as exc:
-        print(f"运行失败: {exc}")
-        print("请检查 EMBEDDING_BASE_URL、EMBEDDING_MODEL，或配置代理。")
+    if len(sys.argv) < 2:
+        print('Usage: python src/main.py "<keyword>"')
+        return
+
+    keyword = sys.argv[1].strip()
+    if not keyword:
+        print("Keyword is empty.")
+        return
+
+    papers = fetch_papers(keyword)
+    if not papers:
+        print("No papers available.")
+        return
+
+    client = build_embedding_client()
+    embedding_matrix = generate_embeddings(papers, client)
+    _attach_embeddings(papers, embedding_matrix)
+
+    labels, _reduced = cluster_embeddings(embedding_matrix)
+    branches = discover_branches(papers, labels)
+
+    field_map = {"field": keyword, "branches": []}
+    for branch in branches:
+        branch_papers = [papers[idx] for idx in branch["paper_indices"]]
+        for paper in branch_papers:
+            paper["branch"] = branch["branch_name"]
+
+        key_papers = rank_key_papers(branch_papers)
+        timeline = build_timeline(branch_papers)
+        field_map["branches"].append(
+            {
+                "branch_id": branch["branch_id"],
+                "branch_name": branch["branch_name"],
+                "keywords": branch["keywords"],
+                "paper_count": len(branch_papers),
+                "key_papers": key_papers,
+                "timeline": timeline,
+            }
+        )
+
+    if not field_map["branches"]:
+        print("No branches discovered.")
         return
 
     export_markdown(field_map, OUTPUT_MARKDOWN_PATH)
+    graph = build_citation_graph(papers)
+    export_graph(graph)
+
     print(f"Done. Output saved to {OUTPUT_MARKDOWN_PATH}")
+    print("Done. Graph saved to output/research_graph.json")
 
 
 if __name__ == "__main__":
