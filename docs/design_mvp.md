@@ -153,7 +153,6 @@ embedding(title + abstract)
 ```
 paper_context_tool/
 
-src/
 main.py
 config.py
 embedding.py
@@ -299,7 +298,7 @@ pip install openai numpy scikit-learn requests
 运行主程序：
 
 ```
-python src/main.py
+python main.py
 ```
 
 输出文件：

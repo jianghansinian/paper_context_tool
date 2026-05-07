@@ -40,7 +40,7 @@ def fetch_from_arxiv(keyword: str, limit: int) -> List[Dict]:
         "search_query": f"all:{keyword}",
         "start": 0,
         "max_results": limit,
-        "sortBy": "submittedDate",
+        "sortBy": "relevance",
         "sortOrder": "descending",
     }
 
@@ -121,6 +121,8 @@ def fetch_from_openalex(keyword: str, limit: int) -> List[Dict]:
                 "citation_count": citation_count,
                 "link": link,
                 "source": "openalex",
+                "openalex_id": work.get("id", ""),
+                "referenced_works": work.get("referenced_works", []),
             }
         )
     return papers
