@@ -30,8 +30,8 @@ class TestLocalEmbedding:
 
 class TestBuildEmbeddingClient:
     def test_returns_none_when_no_key(self, monkeypatch):
-        monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        import embedding as _emb
+        monkeypatch.setattr(_emb, "EMBEDDING_API_KEY", "")
         monkeypatch.setenv("ENABLE_LOCAL_EMBEDDING_FALLBACK", "1")
         client = build_embedding_client()
         assert client is None

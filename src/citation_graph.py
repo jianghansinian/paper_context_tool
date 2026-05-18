@@ -6,7 +6,7 @@ from typing import Dict, List, Set
 import networkx as nx
 from networkx.readwrite import json_graph
 
-from config import OUTPUT_GRAPH_PATH
+import config
 
 
 def _extract_openalex_id(openalex_url: str) -> str:
@@ -80,7 +80,8 @@ def build_citation_graph(papers: List[Dict]) -> nx.DiGraph:
 
 
 def export_graph(graph: nx.DiGraph) -> None:
-    OUTPUT_GRAPH_PATH.parent.mkdir(parents=True, exist_ok=True)
+    path = config.OUTPUT_GRAPH_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
     payload = json_graph.node_link_data(graph, edges="links")
-    with OUTPUT_GRAPH_PATH.open("w", encoding="utf-8") as file:
+    with path.open("w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)

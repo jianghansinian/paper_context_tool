@@ -2,3 +2,4 @@ openai
 numpy
 scikit-learn
 requests
+PyMuPDF
