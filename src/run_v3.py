@@ -19,7 +19,7 @@ from paper_resolver import resolve_paper, _download_arxiv_pdf
 from structured_analyzer import analyze_paper_structure
 from citation_miner import CitationMiner
 from route_analyzer import analyze_routes, compare_with_mainstream
-from markdown_exporter_v3 import export_markdown
+from markdown_exporter_v3 import export_markdown, translate_markdown_to_zh
 from llm_analyzer import build_analyzer_client
 from text_extractor import extract_text_from_pdf
 
@@ -210,12 +210,14 @@ def main():
     en_path = run_dir / "paper_analysis.md"
     zh_path = run_dir / "paper_analysis.zh.md"
 
+    # Generate English report first
     export_markdown(seed_paper, routes, comparison, all_refs, en_path, lang="en")
     print(f"English report: {en_path}")
 
-    # Chinese translation: reuse V2 strategy — post-hoc LLM translation
-    # For now, export a simplified ZH version (same content, translated labels)
-    export_markdown(seed_paper, routes, comparison, all_refs, zh_path, lang="zh")
+    # Chinese: post-hoc LLM translation of the full English report
+    en_text = en_path.read_text(encoding="utf-8")
+    zh_text = translate_markdown_to_zh(en_text, llm_client)
+    zh_path.write_text(zh_text, encoding="utf-8")
     print(f"Chinese report: {zh_path}")
 
     # Save seed paper data for reference

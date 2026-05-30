@@ -2,11 +2,15 @@
 
 Generates a rich Markdown report from the seed paper's structured understanding,
 technical routes, comparative analysis, and reference classification.
-Supports bilingual output (EN / ZH).
+Supports bilingual output (EN / ZH) via post-hoc LLM translation.
 """
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
+from typing import Optional
+
+from openai import OpenAI
 
 from paper import Paper, StructuredUnderstanding, Reference, CitationType
 
@@ -408,3 +412,75 @@ def export_markdown(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with output_file.open("w", encoding="utf-8") as f:
         f.write("\n".join(lines).rstrip() + "\n")
+
+
+# ── Post-hoc LLM translation ──
+
+def translate_markdown_to_zh(
+    markdown_text: str,
+    client: Optional[OpenAI] = None,
+    *,
+    model: Optional[str] = None,
+) -> str:
+    """Translate an English V3 markdown report to Simplified Chinese via LLM.
+
+    Preserves markdown structure, tables, LaTeX formulas, code blocks, paper
+    titles, author names, and technical terms.  Returns the original text
+    unchanged on any failure (graceful degradation).
+    """
+    if client is None:
+        return markdown_text
+
+    from llm_analyzer import _resolve_model
+    model_name = _resolve_model(model)
+    if not model_name:
+        return markdown_text
+
+    # Truncate if extremely long (> 100K chars) to avoid token limits
+    text = markdown_text
+    if len(text) > 100000:
+        text = text[:100000] + "\n\n[Content truncated for translation]"
+
+    prompt = textwrap.dedent(f"""\
+        Translate the following academic research analysis report from English
+        to Simplified Chinese.
+
+        CRITICAL RULES:
+        1. Preserve ALL markdown formatting — headers (# ## ###), tables (|...|),
+           bold (**...**), inline code (`...`), list markers (-), separators (---)
+        2. Keep ALL LaTeX formulas EXACTLY as-is ($...$ or $$...$$)
+        3. Keep ALL paper titles in their original English form
+        4. Keep ALL author names in their original English form
+        5. Keep ALL technical terms and proper nouns in English
+           (e.g., "BEV", "Transformer", "cross-attention", "ViT", "LSS",
+           "end-to-end", "NeRF", "frame", "token", "encoder", "decoder", etc.)
+        6. Keep ALL URLs, DOIs, and links unchanged
+        7. Keep ALL dataset names in English (e.g., "NAVSIM", "Bench2Drive")
+        8. Keep ALL metric names in English (e.g., "PDMS", "EPDMS", "mAP", "NDS")
+        9. Translate all OTHER text naturally to Simplified Chinese:
+           - Section content / descriptions / explanations
+           - Table cell content (except technical terms as above)
+           - Narrative paragraphs, analysis, comparisons
+        10. Do NOT add any extra commentary or markdown fences.
+            Output ONLY the translated markdown.
+
+        MARKDOWN TO TRANSLATE:
+
+        {text}""")
+
+    try:
+        from config import LLM_ANALYZER_TIMEOUT_SEC
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=16000,
+            timeout=LLM_ANALYZER_TIMEOUT_SEC * 3,
+        )
+        raw = response.choices[0].message.content or ""
+        if raw.strip():
+            return raw.strip() + "\n"
+    except Exception as exc:
+        print(f"Markdown translation failed: {exc}")
+
+    return markdown_text
