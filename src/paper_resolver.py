@@ -6,6 +6,7 @@ with metadata from arXiv API, Semantic Scholar API, and local PDF extraction.
 from __future__ import annotations
 
 import re
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
@@ -20,8 +21,9 @@ _ARXIV_URL_RE = re.compile(
     r"(?:arxiv\.org/(?:abs|pdf)/)?(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$",
     re.IGNORECASE,
 )
-_ARXIV_API_BASE = "http://export.arxiv.org/api/query"
+_ARXIV_API_BASE = "https://export.arxiv.org/api/query"
 _SS_API_BASE = "https://api.semanticscholar.org/graph/v1"
+_ARXIV_HEADERS = {"User-Agent": "PaperContextTool/1.0 (mailto:research@example.com)"}
 
 
 def _extract_arxiv_id(url_or_id: str) -> Optional[str]:
@@ -45,13 +47,36 @@ def _is_pdf_path(s: str) -> bool:
 
 
 def _fetch_arxiv_metadata(arxiv_id: str) -> Optional[dict]:
-    """Fetch paper metadata from arXiv API."""
+    """Fetch paper metadata from arXiv API with retry for rate limits."""
     url = f"{_ARXIV_API_BASE}?id_list={arxiv_id}&max_results=1"
-    try:
-        resp = requests.get(url, timeout=config.HTTP_TIMEOUT_SEC)
-        resp.raise_for_status()
-    except Exception as exc:
-        print(f"arXiv API request failed: {exc}")
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers=_ARXIV_HEADERS,
+                              timeout=(10, config.HTTP_TIMEOUT_SEC))
+            if resp.status_code in (429, 503):
+                wait = (attempt + 1) * 5
+                print(f"arXiv API rate-limited (HTTP {resp.status_code}), "
+                      f"retrying in {wait}s (attempt {attempt + 1}/3)...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        except requests.exceptions.Timeout as exc:
+            print(f"arXiv API request timed out: {exc}")
+            return None
+        except requests.exceptions.ConnectionError as exc:
+            print(f"arXiv API connection failed: {exc}")
+            return None
+        except Exception as exc:
+            if attempt < 2:
+                wait = (attempt + 1) * 3
+                print(f"arXiv API request failed ({exc}), retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            print(f"arXiv API request failed after 3 attempts: {exc}")
+            return None
+    else:
+        print(f"arXiv API rate-limited after 3 attempts, giving up.")
         return None
 
     root = ET.fromstring(resp.text)
@@ -148,7 +173,7 @@ def _download_arxiv_pdf(arxiv_id: str) -> Optional[Path]:
 def _parse_metadata_from_text(text: str) -> dict:
     """Heuristically extract title and authors from the first page of a paper."""
     lines = text.strip().split("\n")
-    # Title is usually the first non-empty line
+    # Title is usually the first non-empty, non-affiliation line
     title = ""
     for line in lines[:20]:
         line = line.strip()
@@ -156,18 +181,137 @@ def _parse_metadata_from_text(text: str) -> dict:
             title = line
             break
 
-    authors = []
-    for line in lines[:30]:
-        # Look for lines with author-like patterns (names separated by commas)
-        if len(line) > 10 and "," in line:
-            parts = [p.strip() for p in line.split(",") if len(p.strip()) < 40]
-            if 1 < len(parts) < 10:
-                authors = parts
-                break
-
     # Try to find year from first page
     year_match = re.search(r"\b(20\d{2})\b", "\n".join(lines[:50]))
     year = int(year_match.group(1)) if year_match else 0
+
+    # Extract authors
+    authors = []
+    _NON_AUTHOR_WORDS = {"propose", "method", "approach", "model", "framework",
+                         "introduce", "present", "demonstrate", "achieve",
+                         "abstract", "experiment", "result", "problem",
+                         "however", "therefore", "furthermore", "paper",
+                         "index terms", "keywords"}
+
+    def _has_affiliation(line: str) -> bool:
+        return bool(re.search(r"[*†‡§¶#‖]\d*|\d{1,2}(?:\s|,|$)", line))
+
+    def _clean_name(name: str) -> str:
+        name = re.sub(r"[*†‡§¶#‖]\d*", "", name)        # remove marker chars + optional digits
+        name = re.sub(r"^\d{1,2}\s*", "", name)          # leading superscript numbers
+        name = re.sub(r"[,\s]*\d{1,2}[,\s]*[A-Z]?", "", name)  # trailing numbers + optional letter
+        return name.strip()
+
+    def _is_affiliation_line(line: str) -> bool:
+        """Check if a line looks like an affiliation rather than an author name."""
+        lower = line.lower()
+        return any(w in lower for w in {
+            "university", "institute", "department", "college", "school",
+            "laboratory", "lab", "research", "center", "ltd", "inc", "corp",
+            "gmbh", "llc", "china", "usa", "france", "germany", "japan",
+            "equal contribution", "corresponding author", "these authors",
+            "work done", "internship",
+        })
+
+    # Strategy 1: consecutive lines each with affiliation markers (common: one author per line)
+    for i, line in enumerate(lines[:40]):
+        stripped = line.strip()
+        if len(stripped) < 5:
+            continue
+        lower = stripped.lower()
+        if any(w in lower for w in _NON_AUTHOR_WORDS):
+            continue
+        if not _has_affiliation(stripped):
+            continue
+
+        # Collect consecutive lines with affiliation markers
+        candidate_names = []
+        for j in range(i, min(i + 15, len(lines))):
+            nl = lines[j].strip()
+            if len(nl) < 3:
+                if candidate_names:
+                    break
+                continue
+            nl_lower = nl.lower()
+            if any(w in nl_lower for w in _NON_AUTHOR_WORDS):
+                break
+            if _has_affiliation(nl) and not _is_affiliation_line(nl):
+                name = _clean_name(nl)
+                if len(name) > 1 and len(name) < 40:
+                    candidate_names.append(name)
+            elif candidate_names and not _has_affiliation(nl):
+                break  # end of author block
+
+        if len(candidate_names) >= 2:
+            authors = candidate_names
+            break
+
+    # Strategy 2: space-separated authors with markers on one or two lines
+    # e.g. "Linhan Wang * 1 Zichong Yang 2 Chen Bai 3 ..."
+    if not authors:
+        for i, line in enumerate(lines[:40]):
+            stripped = line.strip()
+            if len(stripped) < 10:
+                continue
+            lower = stripped.lower()
+            if any(w in lower for w in _NON_AUTHOR_WORDS):
+                continue
+            if not _has_affiliation(stripped):
+                continue
+            # Must have space-separated sections but no commas
+            if "," in stripped:
+                continue
+            # Split on affiliation markers: replace "marker N" or "marker" with delimiter
+            delimited = re.sub(r"\s*[*†‡§¶#‖]\s*\d*\s*", "|", stripped)
+            # Also split on standalone digits preceded by spaces
+            delimited = re.sub(r"\s+\d{1,2}\s+", " | ", delimited)
+            delimited = re.sub(r"\s+\d{1,2}$", "|", delimited)
+            parts = [p.strip() for p in delimited.split("|") if p.strip()]
+            name_parts = []
+            for p in parts:
+                cleaned = re.sub(r"\d{1,2}$", "", p).strip()  # trailing digit
+                if len(cleaned) > 2 and len(cleaned) < 40 and not _is_affiliation_line(cleaned):
+                    name_parts.append(cleaned)
+            if len(name_parts) >= 2:
+                # Check next line for continuation authors (same format, no commas)
+                if i + 1 < len(lines):
+                    nl = lines[i + 1].strip()
+                    nl_lower = nl.lower()
+                    if (not any(w in nl_lower for w in _NON_AUTHOR_WORDS)
+                          and _has_affiliation(nl) and "," not in nl):
+                        delimited2 = re.sub(r"\s*[*†‡§¶#‖]\s*\d*\s*", "|", nl)
+                        delimited2 = re.sub(r"\s+\d{1,2}\s+", " | ", delimited2)
+                        delimited2 = re.sub(r"\s+\d{1,2}$", "|", delimited2)
+                        parts2 = [p.strip() for p in delimited2.split("|") if p.strip()]
+                        for p in parts2:
+                            cleaned = re.sub(r"\d{1,2}$", "", p).strip()
+                            if len(cleaned) > 2 and len(cleaned) < 40 and not _is_affiliation_line(cleaned):
+                                name_parts.append(cleaned)
+                authors = name_parts
+                break
+
+    # Strategy 3: clean comma-separated authors (no affiliation markers)
+    # e.g. "Yuzhou Huang, Benjin Zhu, Hengtong Lu, Victor Shea-Jay Huang"
+    if not authors:
+        for i, line in enumerate(lines[:30]):
+            stripped = line.strip()
+            if len(stripped) < 15:
+                continue
+            lower = stripped.lower()
+            if any(w in lower for w in _NON_AUTHOR_WORDS):
+                continue
+            if _has_affiliation(stripped):
+                continue
+            # Must have commas and look like names (not a sentence)
+            if "," not in stripped:
+                continue
+            parts = [p.strip() for p in stripped.split(",")]
+            # Each part should be a short name
+            if all(len(p) > 2 and len(p) < 40 for p in parts) and len(parts) >= 2:
+                # Check that these look like names (2-4 words max per part)
+                if all(p.count(" ") <= 3 for p in parts):
+                    authors = parts
+                    break
 
     return {
         "title": title,

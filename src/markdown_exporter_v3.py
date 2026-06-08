@@ -3,6 +3,9 @@
 Generates a rich Markdown report from the seed paper's structured understanding,
 technical routes, comparative analysis, and reference classification.
 Supports bilingual output (EN / ZH) via post-hoc LLM translation.
+
+Rendering is driven by a ``PaperTypeProfile`` schema when provided (see
+``src/domains/``), or falls back to the hardcoded experimental layout.
 """
 from __future__ import annotations
 
@@ -13,6 +16,7 @@ from typing import Optional
 from openai import OpenAI
 
 from paper import Paper, StructuredUnderstanding, Reference, CitationType
+from domains.base import PaperTypeProfile, FieldDef, SectionDef
 
 # ── Section header translations ──
 _SECTION = {
@@ -25,6 +29,7 @@ _SECTION = {
         "arch_figure": "Architecture Diagram Explanation",
         "components": "Core Components",
         "formulas": "Key Formulas",
+        "design_rationale": "Design Rationale & Intuition",
         "training": "Training Pipeline",
         "inference": "Inference Pipeline",
         "results": "Experimental Results",
@@ -34,6 +39,7 @@ _SECTION = {
         "contrib_limits": "Contributions & Limitations",
         "contributions": "Main Contributions",
         "limitations": "Limitations",
+        "synthesis": "Synthesis & Significance",
         "field_routes": "Field Technical Landscape",
         "route_overview": "Technical Route Overview",
         "branch": "Branch",
@@ -48,6 +54,12 @@ _SECTION = {
         "importance": "Importance",
         "note": "Note",
         "no_data": "(not available)",
+        "empty_section": "(Not discussed in the paper)",
+        "meta_title": "Title",
+        "meta_authors": "Authors",
+        "meta_year": "Year",
+        "meta_citation_count": "Citations",
+        "meta_url": "URL",
         "component_col": "Component",
         "purpose_col": "Purpose",
         "details_col": "Implementation Details",
@@ -73,6 +85,7 @@ _SECTION = {
         "arch_figure": "架构图详解",
         "components": "核心组件",
         "formulas": "关键公式",
+        "design_rationale": "设计原理与直观理解",
         "training": "训练流程",
         "inference": "推理流程",
         "results": "实验结果",
@@ -82,6 +95,7 @@ _SECTION = {
         "contrib_limits": "贡献与局限性",
         "contributions": "主要贡献",
         "limitations": "局限性",
+        "synthesis": "总结与意义",
         "field_routes": "领域技术路线",
         "route_overview": "技术路线全景",
         "branch": "分支",
@@ -96,6 +110,12 @@ _SECTION = {
         "importance": "重要性",
         "note": "说明",
         "no_data": "（无数据）",
+        "empty_section": "（论文未讨论）",
+        "meta_title": "标题",
+        "meta_authors": "作者",
+        "meta_year": "年份",
+        "meta_citation_count": "引用次数",
+        "meta_url": "URL",
         "component_col": "组件",
         "purpose_col": "功能",
         "details_col": "实现细节",
@@ -157,8 +177,21 @@ def export_markdown(
     references: list[Reference] | None,
     output_path: str | Path,
     lang: str = "en",
+    *,
+    profile: Optional[PaperTypeProfile] = None,
 ) -> None:
-    """Generate the full structured analysis markdown report."""
+    """Generate the full structured analysis markdown report.
+
+    When *profile* is given, section structure and rendering are driven by
+    the schema.  Otherwise the hardcoded experimental layout is used.
+    """
+    if profile is not None:
+        return _export_schema_driven(
+            seed_paper, routes, comparison, references,
+            output_path, lang, profile,
+        )
+
+    # ── Hardcoded path (backward compat) ──
     lines = []
     s = seed_paper.structured
 
@@ -322,13 +355,13 @@ def export_markdown(
                 lines.append(f"- {lim}")
             lines.append("")
 
-    # ── Field Technical Landscape ──
-    lines.append("---")
-    lines.append("")
-    lines.append(f"## 6. {_t('field_routes', lang)}")
-    lines.append("")
-
+    # ── Field Technical Landscape [仅完整分析模式] ──
     if routes:
+        lines.append("---")
+        lines.append("")
+        lines.append(f"## 6. {_t('field_routes', lang)}")
+        lines.append("")
+
         overview = routes.get("overview", "")
         if overview:
             lines.append(f"### 6.1 {_t('route_overview', lang)}")
@@ -350,7 +383,7 @@ def export_markdown(
                 lines.append(f"**{_t('common_tech', lang)}**: {', '.join(tags)}")
                 lines.append("")
 
-    # ── Comparative Analysis ──
+    # ── Comparative Analysis [仅完整分析模式] ──
     if comparison:
         lines.append("---")
         lines.append("")
@@ -414,6 +447,351 @@ def export_markdown(
         f.write("\n".join(lines).rstrip() + "\n")
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Schema-driven export
+# ──────────────────────────────────────────────────────────────────────
+
+def _is_empty(value) -> bool:
+    """Check whether a field value is semantically empty."""
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    if isinstance(value, (list, dict)) and len(value) == 0:
+        return True
+    return False
+
+
+def _render_field_value(value, field: FieldDef, lang: str) -> list[str]:
+    """Render a single field value to one or more markdown lines."""
+    lines: list[str] = []
+
+    if field.kind == "text":
+        text = str(value).strip()
+        if text and field.name in ("intuitive_analogy", "core_question"):
+            lines.append(f"> {text}")
+        else:
+            import re
+            # (1) Split mid-line (N) items with double newline for
+            # markdown paragraph breaks
+            text = re.sub(r'(?<!\n)(?<!\A)\((\d+)\)\s', r'\n\n(\1) ', text)
+            # (2) Ensure blank lines between consecutive (N) items that
+            # ended up on adjacent lines with only a single \n between them
+            text = re.sub(r'(\(\d+\)\s+[^\n]+)\n(\(\d+\)\s+)', r'\1\n\n\2', text)
+            # (3) Add paragraph break before bold sub-headers after ". ",
+            # but NOT after digit-period (preserve "1. **Title**" intact)
+            text = re.sub(r'(?<=[a-zA-Z一-鿿])\. (\*\*[^*]{2,80}\*\*)',
+                         r'\n\n\1', text)
+            # Clean up excessive blank lines
+            text = re.sub(r'\n{4,}', '\n\n\n', text)
+            lines.append(text)
+    elif field.kind == "list[str]":
+        if isinstance(value, list):
+            for item in value:
+                lines.append(f"- {item}")
+    elif field.kind == "formula_table":
+        if not isinstance(value, list) or not value:
+            return lines
+        # 3-column format matching legacy: Formula ($latex$ — name) | Explanation | Significance
+        headers = [
+            _t("formula_col", lang),
+            _t("explanation_col", lang),
+            _t("significance_col", lang),
+        ]
+        lines.append("| " + " | ".join(headers) + " |")
+        lines.append("|---|---|---|")
+        for row in value:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name", ""))
+            latex = str(row.get("latex", ""))
+            formula_cell = f"${latex}$ — {name}" if latex else name
+            expl = _escape_md(str(row.get("explanation", "")))
+            sig = _escape_md(str(row.get("significance", "")))
+            lines.append(f"| {formula_cell} | {expl} | {sig} |")
+    elif field.kind in ("component_table", "result_table", "key_value_table"):
+        if not isinstance(value, list) or not value:
+            return lines
+        cols = field.columns
+        if cols:
+            headers = [c.label_en if lang == "en" else c.label_zh for c in cols]
+            lines.append("| " + " | ".join(headers) + " |")
+            lines.append("|" + "|".join(["---"] * len(cols)) + "|")
+            for row in value:
+                if not isinstance(row, dict):
+                    continue
+                cells = [_escape_md(str(row.get(c.name, ""))) for c in cols]
+                lines.append("| " + " | ".join(cells) + " |")
+    elif field.kind == "structured_list":
+        if isinstance(value, list):
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                title = item.get("title", "")
+                desc = item.get("description", "")
+                papers = item.get("papers", [])
+                lines.append(f"- **{title}**: {desc}")
+                if papers:
+                    lines.append(f"  — {', '.join(papers)}")
+
+    return lines
+
+
+def _render_meta_field(field_name: str, paper: Paper, lang: str) -> str:
+    """Render a meta: field from the Paper object's metadata with label."""
+    meta_key = field_name[len("meta:"):]
+    label = _t(f"meta_{meta_key}", lang)
+    if meta_key == "title":
+        val = paper.title or _t("no_data", lang)
+    elif meta_key == "authors":
+        val = ", ".join(paper.authors) if paper.authors else _t("no_data", lang)
+    elif meta_key == "year":
+        val = str(paper.year) if paper.year else _t("no_data", lang)
+    elif meta_key == "citation_count":
+        val = str(paper.citation_count)
+    elif meta_key == "url":
+        val = paper.url or _t("no_data", lang)
+    else:
+        return ""
+    return f"- **{label}**: {val}"
+
+
+def _eval_condition(condition: str, routes, comparison, references) -> bool:
+    """Evaluate a simple SectionDef condition expression."""
+    if condition is None:
+        return True
+    # Whitelist-based evaluation: only allow specific expressions
+    allowed = {
+        "routes": routes,
+        "comparison": comparison,
+        "references": references,
+    }
+    try:
+        return bool(eval(condition, {"__builtins__": {}}, allowed))
+    except Exception:
+        return True  # if eval fails, show the section
+
+
+def _render_schema_section(
+    section: SectionDef,
+    paper: Paper,
+    structured: dict,
+    routes,
+    comparison,
+    references,
+    lang: str,
+    profile: PaperTypeProfile,
+    counters: list[int],
+) -> list[str]:
+    """Render one section (and its subsections) to markdown lines."""
+    lines: list[str] = []
+
+    # Check section-level condition
+    if section.condition and not _eval_condition(
+        section.condition, routes, comparison, references
+    ):
+        return lines
+
+    # ── Section numbering ──
+    level = section.level
+    while len(counters) <= level:
+        counters.append(0)
+    counters[level] += 1
+    # Reset deeper counters
+    for i in range(level + 1, len(counters)):
+        counters[i] = 0
+
+    num_parts = [str(counters[i]) for i in range(1, level + 1)]
+    section_num = ".".join(num_parts)
+
+    # Collect rendered field blocks
+    rendered_blocks: list[list[str]] = []
+
+    # ── Handle special sections by name ──
+    if section.name == "field_routes" and routes:
+        rendered_blocks.append(_render_routes_section(routes, lang, counters[1]))
+    elif section.name == "comparison" and comparison:
+        rendered_blocks.append(_render_comparison_section(comparison, lang, counters[1]))
+    elif section.name == "references" and references:
+        rendered_blocks.append(_render_references_section(references, lang))
+    elif section.fields:
+        # ── Regular section with structured fields ──
+        for field_name in section.fields:
+            if field_name.startswith("meta:"):
+                val = _render_meta_field(field_name, paper, lang)
+                if val:
+                    rendered_blocks.append([val])
+            else:
+                val = structured.get(field_name) if structured else None
+                if _is_empty(val):
+                    continue
+                # Look up the FieldDef for rendering
+                fd = profile.get_field(field_name)
+                if fd:
+                    rendered = _render_field_value(val, fd, lang)
+                    # Bold key_insight text
+                    if field_name == "key_insight" and rendered:
+                        rendered = [f"**{rendered[0]}**"]
+                    if rendered:
+                        rendered_blocks.append(rendered)
+
+    # ── Render subsections ──
+    for sub in section.subsections:
+        sub_lines = _render_schema_section(
+            sub, paper, structured, routes, comparison, references, lang,
+            profile, counters,
+        )
+        if sub_lines:
+            rendered_blocks.append(sub_lines)
+
+    # ── Handle empty sections ──
+    if not rendered_blocks:
+        if section.always_show:
+            pass  # force render even when empty
+        elif section.level >= 2 and section.fields:
+            # For subsections with defined fields, show placeholder to preserve numbering
+            placeholder = _t("empty_section", lang)
+            rendered_blocks.append([placeholder])
+        else:
+            return lines  # skip top-level empty sections entirely
+
+    # ── Emit heading ──
+    heading = "#" * (level + 1)
+    title = section.title_en if lang == "en" else section.title_zh
+    num_display = f"{section_num}." if level == 1 else section_num
+    lines.append(f"{heading} {num_display} {title}")
+    lines.append("")
+
+    for block in rendered_blocks:
+        lines.extend(block)
+        lines.append("")
+
+    return lines
+
+
+def _render_routes_section(routes: dict, lang: str, parent_num: int) -> list[str]:
+    """Render the field technical landscape section."""
+    lines: list[str] = []
+    overview = routes.get("overview", "")
+    if overview:
+        lines.append(f"### {parent_num}.1 {_t('route_overview', lang)}")
+        lines.append("")
+        lines.append(overview)
+        lines.append("")
+
+    for i, branch in enumerate(routes.get("branches", []), 1):
+        name = branch.get("name", f"Branch {i}")
+        is_ms = " ★" if branch.get("is_mainstream") else ""
+        lines.append(f"### {parent_num}.{i + 1} {name}{is_ms}")
+        lines.append("")
+        if branch.get("description"):
+            lines.append(branch["description"])
+            lines.append("")
+        tags = branch.get("common_technical_tags", [])
+        if tags:
+            lines.append(f"**{_t('common_tech', lang)}**: {', '.join(tags)}")
+            lines.append("")
+    return lines
+
+
+def _render_comparison_section(comparison: dict, lang: str, parent_num: int) -> list[str]:
+    """Render the comparative analysis section."""
+    lines: list[str] = []
+    matrix = comparison.get("comparison_matrix", [])
+    if matrix:
+        lines.append(f"### {parent_num}.1 {_t('comp_matrix', lang)}")
+        lines.append("")
+        lines.append(
+            f"| {_t('dimension', lang)} | {_t('seed_approach', lang)} "
+            f"| {_t('mainstream_approach', lang)} | {_t('advantage', lang)} |"
+        )
+        lines.append("|---|---|---|---|")
+        for row in matrix:
+            dim = _escape_md(row.get("dimension", ""))
+            seed_val = _escape_md(row.get("seed_paper", ""))
+            main_val = _escape_md(row.get("mainstream_approach", ""))
+            adv = _escape_md(row.get("advantage", ""))
+            lines.append(f"| {dim} | {seed_val} | {main_val} | {adv} |")
+        lines.append("")
+
+    narrative = comparison.get("narrative", "")
+    if narrative:
+        lines.append(f"### {parent_num}.2 {_t('comp_narrative', lang)}")
+        lines.append("")
+        lines.append(narrative)
+        lines.append("")
+
+    positioning = comparison.get("unique_positioning", "")
+    if positioning:
+        lines.append(f"### {parent_num}.3 {_t('unique_pos', lang)}")
+        lines.append("")
+        lines.append(positioning)
+        lines.append("")
+    return lines
+
+
+def _render_references_section(references: list, lang: str) -> list[str]:
+    """Render the reference classification section."""
+    lines: list[str] = []
+    lines.append(
+        f"| # | Paper | {_t('ref_type', lang)} "
+        f"| {_t('importance', lang)} | {_t('note', lang)} |"
+    )
+    lines.append("|---|---|---|---|---|")
+    for i, ref in enumerate(references, 1):
+        title = _escape_md(ref.paper_title or ref.paper_id or "?")
+        ct_label = _ct(ref.citation_type, lang)
+        stars = _importance_stars(ref.is_key_reference)
+        note = _escape_md((ref.context or "")[:100])
+        lines.append(f"| {i} | {title} | {ct_label} | {stars} | {note} |")
+    return lines
+
+
+def _export_schema_driven(
+    seed_paper: Paper,
+    routes: dict | None,
+    comparison: dict | None,
+    references: list[Reference] | None,
+    output_path: str | Path,
+    lang: str,
+    profile: PaperTypeProfile,
+) -> None:
+    """Schema-driven markdown export — rendering order from PaperTypeProfile."""
+    lines: list[str] = []
+
+    # ── Title ──
+    title = seed_paper.title or "Unknown Paper"
+    lines.append(f"# {_t('title', lang)}: {title}")
+    lines.append("")
+
+    # ── Convert structured to dict ──
+    s = seed_paper.structured
+    structured: dict = {}
+    if s is not None:
+        if isinstance(s, StructuredUnderstanding):
+            structured = s.to_dict()
+        elif isinstance(s, dict):
+            structured = s
+
+    # ── Render sections ──
+    counters: list[int] = [0]  # index by level
+    for section in profile.sections:
+        section_lines = _render_schema_section(
+            section, seed_paper, structured, routes, comparison, references, lang,
+            profile, counters,
+        )
+        if section_lines:
+            lines.extend(section_lines)
+            lines.append("---")
+            lines.append("")
+
+    # ── Write file ──
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with output_file.open("w", encoding="utf-8") as f:
+        f.write("\n".join(lines).rstrip() + "\n")
+
+
 # ── Post-hoc LLM translation ──
 
 def translate_markdown_to_zh(
@@ -451,18 +829,24 @@ def translate_markdown_to_zh(
         2. Keep ALL LaTeX formulas EXACTLY as-is ($...$ or $$...$$)
         3. Keep ALL paper titles in their original English form
         4. Keep ALL author names in their original English form
-        5. Keep ALL technical terms and proper nouns in English
-           (e.g., "BEV", "Transformer", "cross-attention", "ViT", "LSS",
-           "end-to-end", "NeRF", "frame", "token", "encoder", "decoder", etc.)
+        5. Keep ALL of the following technical terms in English (DO NOT translate):
+           - RL/ML terms: actor, critic, rollout, replay buffer, SAC, policy,
+             Q-value, reward, episode, checkpoint, embedding, token, BEV,
+             autoencoder, encoder, decoder, MLP, ViT, LSS, feature, batch
+           - Method names: CIL-SERL, 3DGS, NMPC, HIL-SERL, REAP-SAC, ParkingHIL,
+             E2EParking, ParkingE2E, Lift-Splat-Shoot
+           - Dataset & metric names: NAVSIM, Bench2Drive, PDMS, EPDMS, mAP, NDS,
+             PSR, PCR, PTR, PBR, NGS
+           - Other: IoU, NUC, ROS, IMU, LiDAR, RGB, fps, Hz, GPU, CPU
         6. Keep ALL URLs, DOIs, and links unchanged
-        7. Keep ALL dataset names in English (e.g., "NAVSIM", "Bench2Drive")
-        8. Keep ALL metric names in English (e.g., "PDMS", "EPDMS", "mAP", "NDS")
-        9. Translate all OTHER text naturally to Simplified Chinese:
+        7. Keep ALL model names and hardware names in English (e.g., "XGRIDS Lixel
+           K1", "NVIDIA RTX 4090", "Chang'an CS55", "3DRealCar")
+        8. Translate all OTHER text naturally to Simplified Chinese:
            - Section content / descriptions / explanations
            - Table cell content (except technical terms as above)
            - Narrative paragraphs, analysis, comparisons
-        10. Do NOT add any extra commentary or markdown fences.
-            Output ONLY the translated markdown.
+        9. Do NOT add any extra commentary or markdown fences.
+           Output ONLY the translated markdown.
 
         MARKDOWN TO TRANSLATE:
 

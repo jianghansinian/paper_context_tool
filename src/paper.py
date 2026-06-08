@@ -48,17 +48,29 @@ class StructuredUnderstanding:
     components: list[Component] = field(default_factory=list)
     formulas: list[Formula] = field(default_factory=list)
     architecture_figure: Optional[str] = None
+    design_rationale: Optional[str] = None
+    related_work_context: Optional[str] = None
+    intuitive_analogy: Optional[str] = None
     training_data: str = ""
+    data_engineering: Optional[str] = None
+    training_stages: list[dict] = field(default_factory=list)
     loss_functions: list[str] = field(default_factory=list)
     optimizer: str = ""
     training_procedure: str = ""
     inference_procedure: str = ""
     post_processing: Optional[str] = None
+    deployment_architecture: Optional[str] = None
+    deployment_value: Optional[str] = None
+    field_evolution: Optional[str] = None
+    core_question: Optional[str] = None
+    evaluation_setup: Optional[str] = None
+    industry_comparison: list[dict] = field(default_factory=list)
     main_results: list[Result] = field(default_factory=list)
     ablation_results: list[str] = field(default_factory=list)
     qualitative_results: Optional[str] = None
     contributions: list[str] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
+    synthesis: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -76,17 +88,29 @@ class StructuredUnderstanding:
             components=components,
             formulas=formulas,
             architecture_figure=d.get("architecture_figure"),
+            design_rationale=d.get("design_rationale"),
+            related_work_context=d.get("related_work_context"),
+            intuitive_analogy=d.get("intuitive_analogy"),
             training_data=d.get("training_data", ""),
+            data_engineering=d.get("data_engineering"),
+            training_stages=d.get("training_stages", []),
             loss_functions=d.get("loss_functions", []),
             optimizer=d.get("optimizer", ""),
             training_procedure=d.get("training_procedure", ""),
             inference_procedure=d.get("inference_procedure", ""),
             post_processing=d.get("post_processing"),
+            deployment_architecture=d.get("deployment_architecture"),
+            deployment_value=d.get("deployment_value"),
+            field_evolution=d.get("field_evolution"),
+            core_question=d.get("core_question"),
+            evaluation_setup=d.get("evaluation_setup"),
+            industry_comparison=d.get("industry_comparison", []),
             main_results=main_results,
             ablation_results=d.get("ablation_results", []),
             qualitative_results=d.get("qualitative_results"),
             contributions=d.get("contributions", []),
             limitations=d.get("limitations", []),
+            synthesis=d.get("synthesis"),
         )
 
 

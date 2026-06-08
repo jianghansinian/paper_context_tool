@@ -1,12 +1,15 @@
 """V3 pipeline entry point: Seed-paper-centric structured understanding.
 
 Usage:
-    python src/run_v3.py <arxiv_url_or_pdf_path> [description]
+    python src/run_v3.py <arxiv_url_or_pdf_path> [description] [--route]
+
+Options:
+    --route     Enable technical route analysis + comparative analysis (default: off)
 
 Examples:
     python src/run_v3.py https://arxiv.org/abs/2203.17270
-    python src/run_v3.py 2203.17270 "I want to understand the temporal attention design"
-    python src/run_v3.py /path/to/paper.pdf
+    python src/run_v3.py 2203.17270 "focus on temporal attention"
+    python src/run_v3.py /path/to/paper.pdf --route
 """
 from __future__ import annotations
 
@@ -22,6 +25,9 @@ from route_analyzer import analyze_routes, compare_with_mainstream
 from markdown_exporter_v3 import export_markdown, translate_markdown_to_zh
 from llm_analyzer import build_analyzer_client
 from text_extractor import extract_text_from_pdf
+from domains.ai_ml import EXPERIMENTAL_PROFILE
+from domain_detector import detect_domain
+from paper_type_detector import detect_paper_type
 
 
 def _print_separator(title: str) -> None:
@@ -46,16 +52,26 @@ def _init_v3_run_dir(paper) -> Path:
 
 def main():
     if len(sys.argv) < 2:
-        print('Usage: python src/run_v3.py <arxiv_url_or_pdf_path> [description]')
+        print('Usage: python src/run_v3.py <arxiv_url_or_pdf_path> [description] [--route]')
+        print()
+        print('Options:')
+        print('  --route   Enable technical route analysis + comparative analysis (default: off)')
         print()
         print('Examples:')
         print('  python src/run_v3.py https://arxiv.org/abs/2203.17270')
         print('  python src/run_v3.py 2203.17270 "focus on temporal attention"')
-        print('  python src/run_v3.py /path/to/paper.pdf')
+        print('  python src/run_v3.py /path/to/paper.pdf --route')
         sys.exit(1)
 
-    target = sys.argv[1].strip()
-    user_description = sys.argv[2].strip() if len(sys.argv) > 2 else ""
+    # Parse --route flag
+    args = [a for a in sys.argv[1:] if a != "--route"]
+    route_enabled = "--route" in sys.argv
+
+    if route_enabled:
+        config.V3_ROUTE_ANALYSIS_ENABLED = True
+
+    target = args[0].strip()
+    user_description = args[1].strip() if len(args) > 1 else ""
 
     # ── Build LLM client ──
     llm_client = build_analyzer_client()
@@ -78,15 +94,39 @@ def main():
     print(f"Full text: {'yes' if seed_paper.full_text else 'no'}"
           f" ({len(seed_paper.full_text)} chars)" if seed_paper.full_text else "")
 
+    if not seed_paper.full_text:
+        print("")
+        print("  ⚠ WARNING: Full text is unavailable. Analysis quality will be significantly")
+        print("  degraded — only abstract-based analysis is possible. Formulas, detailed")
+        print("  architecture, training procedures, and experimental results may be missing.")
+        print("  Possible causes: arXiv PDF not yet indexed (new paper), rate-limiting,")
+        print("  or network error. Retry later or provide a local PDF file.")
+        print("  Set V3_STRUCTURED_ANALYSIS_ENABLED=0 to skip analysis and inspect metadata only.")
+
     run_dir = _init_v3_run_dir(seed_paper)
     print(f"Output:   {run_dir}")
+
+    # ══════════════════════════════════════════════════════════════
+    # Phase 1.2: Domain detection + Paper type detection
+    # ══════════════════════════════════════════════════════════════
+    _print_separator("Phase 1.2: Domain & paper type detection")
+    domain = detect_domain(seed_paper, llm_client)
+    print(f"Detected domain: {domain.domain_name} ({domain.domain_description[:60]}...)")
+
+    paper_type = detect_paper_type(seed_paper, domain, llm_client)
+    profile = domain.get_paper_type(paper_type)
+    if profile is None:
+        profile = domain.paper_types[0]  # fallback to first defined type
+    print(f"Detected type: {paper_type}")
 
     # ══════════════════════════════════════════════════════════════
     # Phase 1.5: Structured Understanding (seed paper)
     # ══════════════════════════════════════════════════════════════
     if config.V3_STRUCTURED_ANALYSIS_ENABLED:
         _print_separator("Phase 1.5: Structured Understanding (seed paper)")
-        structured = analyze_paper_structure(seed_paper, llm_client)
+        structured = analyze_paper_structure(seed_paper, llm_client,
+                                             profile=profile,
+                                             domain_name=domain.domain_name)
         if structured:
             seed_paper.structured = structured
             print(f"Structured understanding complete.")
@@ -150,7 +190,9 @@ def main():
                     pass
                 time.sleep(0.5)  # Avoid hammering arXiv servers
 
-            struct = analyze_paper_structure(paper, llm_client)
+            struct = analyze_paper_structure(paper, llm_client,
+                                               profile=profile,
+                                               domain_name=domain.domain_name)
             if struct:
                 paper.structured = struct
                 analyzed += 1
@@ -211,7 +253,8 @@ def main():
     zh_path = run_dir / "paper_analysis.zh.md"
 
     # Generate English report first
-    export_markdown(seed_paper, routes, comparison, all_refs, en_path, lang="en")
+    export_markdown(seed_paper, routes, comparison, all_refs, en_path, lang="en",
+                    profile=profile)
     print(f"English report: {en_path}")
 
     # Chinese: post-hoc LLM translation of the full English report

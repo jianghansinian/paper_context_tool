@@ -4,7 +4,14 @@
 
 V2 的目标是：用户输入关键词，系统自动抓取相关论文并生成领域技术路线图。
 
-V3 将核心使用场景转向：**用户提供一篇 pdf论文链接 + 自然语言描述，系统对其进行结构化深度理解，并结合引用挖掘出的领域主流技术路线进行对比分析，最终生成结构化 Markdown 报告。**
+V3 将核心使用场景转向：**用户提供一篇 pdf论文链接 + 自然语言描述，系统对其进行结构化深度理解，最终生成结构化 Markdown 报告。** 技术路线演进分析作为用户可选功能，由用户根据需求决定是否生成。
+
+### 两种运行模式
+
+| 模式 | 触发方式 | 包含内容 | 适用场景 |
+|---|---|---|---|
+| **基础分析** | 默认（或 `V3_ROUTE_ANALYSIS_ENABLED=0`） | 结构化理解 + 引用挖掘 + 关键论文分析 | 快速了解一篇论文的方法和贡献 |
+| **完整分析** | `V3_ROUTE_ANALYSIS_ENABLED=1` 或 `--route` CLI 参数 | 基础分析 + 技术路线归纳 + 对比分析 | 需要理解论文在领域中的定位和技术演进脉络 |
 
 ### 核心能力
 
@@ -18,9 +25,9 @@ V3 将核心使用场景转向：**用户提供一篇 pdf论文链接 + 自然�
    - **后向**: 种子论文的参考文献 → 递归查找到经典论文
    - **前向**: 查找引用这些经典论文的新论文
    - **分类**: 区分赞同性引用、对比性引用、奠基性引用
-3. **归纳主流技术路线** — 将关键论文按技术路线分组，形成领域全景图
-4. **对比分析** — 种子论文与主流技术路线的设计差异
-5. **生成结构化 Markdown** — 一篇完整的论文深度解读报告
+3. **归纳主流技术路线** [可选] — 将关键论文按技术路线分组，形成领域全景图
+4. **对比分析** [可选] — 种子论文与主流技术路线的设计差异
+5. **生成结构化 Markdown** — 一篇完整的论文深度解读报告（章节根据模式动态调整）
 
 ---
 
@@ -30,28 +37,30 @@ V3 将核心使用场景转向：**用户提供一篇 pdf论文链接 + 自然�
 @dataclass
 class Paper:
     """统一论文表示，覆盖种子论文、参考文献、领域论文等所有来源。"""
-    id: str                     # 论文唯一标识（Semantic Scholar ID）
-    arxiv_id: str               # arXiv ID（如果有）
+    id: str                              # 论文唯一标识（Semantic Scholar ID）
+    arxiv_id: str | None                 # arXiv ID（如果有）
     title: str
     authors: list[str]
     year: int
     abstract: str
-    full_text: str | None       # PDF 提取的全文（关键论文才有）
+    full_text: str | None                # PDF 提取的全文（关键论文才有）
     citation_count: int
-    url: str                    # 论文链接
-    source: str                 # "arxiv" | "semantic_scholar" | "openalex"
-    references: list[Reference] # 本文引用的论文列表
-    citations: list[Reference]  # 引用本文的论文列表
+    url: str                             # 论文链接
+    source: str                          # "arxiv" | "semantic_scholar" | "pdf_file" | "openalex"
+    reference_ids: list[str]             # 本文引用的论文 ID 列表
     structured: StructuredUnderstanding | None  # 结构化理解结果
+    user_description: str                # 用户提供的分析聚焦描述
 
 
 @dataclass
 class Reference:
-    """引用关系，记录被引论文及周边信息。"""
-    paper: Paper
-    context: str                # 在原文中的引用上下文（周围句子）
-    citation_type: CitationType # 引用类型
-    is_key_reference: bool      # 是否是关键引用（高被引 / 奠基性）
+    """引用关系，记录被引论文 ID 及周边信息。被引论文的完整数据通过
+    CitationMiner._papers 字典按 paper_id 查询。"""
+    paper_id: str                # 被引论文的 Semantic Scholar ID
+    paper_title: str             # 被引论文标题（冗余，方便直接显示）
+    context: str                 # 在原文中的引用上下文（周围句子）
+    citation_type: CitationType  # 引用类型
+    is_key_reference: bool       # 是否是关键引用（高被引 / 奠基性）
 
 
 class CitationType(Enum):
@@ -128,48 +137,50 @@ class Result:
 ## 3. 完整 Pipeline
 
 ```
-用户输入 论文pdf链接 + 自然语言描述
+用户输入 arXiv URL/PDF + 自然语言描述 [--route]
     │
-    ├── Phase 1: 种子论文处理 ────────────────────────────────
-    │   │
-    │   ├─ [1.1] ResolvePaper — 解析 arxiv ID，通过 API 获取元数据
-    │   ├─ [1.2] DownloadPDF — 下载 PDF
-    │   ├─ [1.3] ExtractText — PDF 文本提取
-    │   ├─ [1.4] ParseReferences — 提取参考文献列表（从 PDF 或 API）
-    │   └─ [1.5] StructuredUnderstanding — LLM 全文分析 → 结构化理解
+    ├── Phase 1: 论文解析
+    │   ├─ resolve_paper() — arXiv API 元数据 + Semantic Scholar 补充 + PDF 下载 + 文本提取
+    │   └─ 输出: Paper 对象（含 full_text）
     │
-    ├── Phase 2: 后向引用挖掘 ────────────────────────────────
-    │   │
-    │   ├─ [2.1] FetchRefMetadata — 调 Semantic Scholar API 获取每篇引用的元数据
-    │   ├─ [2.2] ClassifyCitations — LLM 分类引用类型（支持/对比/奠基）
-    │   ├─ [2.3] RankReferences — 按引用量、引用类型排序关键引用
-    │   └─ [2.4] RecursiveExpand — 对 Top-K 关键引用，递归执行 [2.1]-[2.3]（深度可配置）
+    ├── Phase 1.5: 结构化理解（种子论文）
+    │   ├─ analyze_paper_structure(seed_paper, llm_client) → StructuredUnderstanding
+    │   └─ 输出: Paper.structured（架构、公式、训练/推理流程、实验结果等）
     │
-    ├── Phase 3: 前向引用挖掘 ────────────────────────────────
-    │   │
-    │   ├─ [3.1] FetchCitingPapers — 查 Semantic Scholar 谁引用了种子论文
-    │   ├─ [3.2] FetchCitingForRefs — 查谁引用了关键参考文献
-    │   └─ [3.3] MergeAndRank — 合并去重后按引用量排序，筛选领域重要论文
+    ├── Phase 2: 后向引用挖掘 [V3_CITATION_MINING_ENABLED=1]
+    │   ├─ CitationMiner.mine_references() — Semantic Scholar API 递归引用查找
+    │   ├─ CitationMiner.classify_references() — LLM 引用分类（supporting/contrasting/foundational）
+    │   └─ 输出: 引用关系池 + 分类结果
     │
-    ├── Phase 4: 关键论文深度分析 ─────────────────────────────
-    │   │
-    │   ├─ [4.1] IdentifyKeyPapers — 从 Phase 2+3 中选出 Top-N 关键论文
-    │   ├─ [4.2] AcquireFullText — 对有 arXiv ID 的论文下载 PDF 并提取文本
-    │   └─ [4.3] AnalyzeKeyPapers — 对每篇关键论文应用相同的 StructuredUnderstanding
+    ├── Phase 3: 前向引用挖掘 [V3_CITATION_MINING_ENABLED=1]
+    │   ├─ CitationMiner.mine_citations() — Semantic Scholar API 查找引用种子论文的论文
+    │   └─ 输出: 扩展论文池
     │
-    ├── Phase 5: 技术路线归纳 ────────────────────────────────
-    │   │
-    │   ├─ [5.1] ExtractTechniques — LLM 从每篇论文的结构化理解中提取技术特征
-    │   ├─ [5.2] ClusterByApproach — 按技术路线分组（非主题聚类）
-    │   └─ [5.3] IdentifyMainstream — 识别主流路线（论文多 / 被引用多）
+    ├── Phase 4: 关键论文深度分析 [V3_STRUCTURED_ANALYSIS_ENABLED=1]
+    │   ├─ CitationMiner.get_key_papers() — 加权排序筛选 Top-N 论文
+    │   ├─ 对每篇关键论文: PDF 下载 + 文本提取 + analyze_paper_structure()
+    │   └─ 输出: 关键论文列表（含 structured）
     │
-    └── Phase 6: 输出 ──────────────────────────────────────
-        │
-        ├─ [6.1] ComparativeAnalysis — 种子论文 vs 主流路线设计差异
-        └─ [6.2] GenerateMarkdown — 最终输出结构化报告
+    ├── Phase 5: 技术路线分析 [可选，V3_ROUTE_ANALYSIS_ENABLED=1]
+    │   ├─ analyze_routes() — LLM 按技术路线分组 + 识别主流路线
+    │   ├─ compare_with_mainstream() — 种子论文 vs 主流路线对比
+    │   └─ 输出: routes dict + comparison dict
+    │
+    └── Phase 6: 输出导出
+        ├─ export_markdown() — 结构化 Markdown 报告（英文）
+        ├─ translate_markdown_to_zh() — LLM 后置中译
+        └─ 输出: paper_analysis.md + paper_analysis.zh.md + seed_paper.json + citation_graph.json
 ```
 
-### 3.1 自然语言描述的作用与传递
+### 3.1 两种运行模式
+
+**基础分析模式**（默认，`V3_ROUTE_ANALYSIS_ENABLED=0`）：适合快速了解一篇论文。Pipeline 执行 Phase 1-4 + Phase 6 markdown 导出。输出报告包含论文概览、问题定义、方法架构、实验结果、贡献与局限、参考文献分类。不包含领域技术路线和对比分析章节。
+
+**完整分析模式**（`V3_ROUTE_ANALYSIS_ENABLED=1`）：适合需要理解论文在领域中定位的用户。在基础分析之上，增加 Phase 5 技术路线归纳和 Phase 6.1 对比分析。输出报告额外包含"领域技术路线"和"对比分析"两个章节。
+
+用户根据自身需求通过环境变量选择模式，无需为不需要的技术路线分析等待额外的 LLM 调用时间。
+
+### 3.2 自然语言描述的作用与传递
 
 用户提供的自然语言描述（`Paper.user_description`）**贯穿整个 pipeline**，在每个 LLM 分析步骤中作为上下文注入：
 
@@ -189,7 +200,7 @@ class Result:
 
 当用户不提供描述时，所有 LLM 调用使用通用分析指令，不做方向性引导。
 
-### 3.2 数据流图
+### 3.3 数据流图
 
 ```
 arXiv URL
@@ -249,14 +260,11 @@ arXiv URL
 {structured_understanding_schema}
 ```
 
-### 4.3 分块策略
+### 4.3 长文本处理
 
-对于长论文（全文可能超过 LLM 上下文窗口），采用 Recursive Character Text Splitter 分块，每块 ~4000 tokens + overlap 200 tokens：
+当前采用直接截断策略：全文截取前 120K 字符（~30K tokens），保留 abstract 开头 + 正文内容。对于大多数会议/期刊论文（8-14 页）足够覆盖，但对于长综述或博士论文可能丢失后续章节内容。
 
-- 块 1: 标题 + 摘要 + 引言 → 提取 problem / motivation
-- 块 2: Method 章节 → 提取 architecture / components / formulas
-- 块 3: Experiments 章节 → 提取 results / ablation
-- 汇总块: LLM 综合各块输出生成最终结构化理解
+**未来优化方向**：分块策略 — 将长论文按章节分块（Introduction / Method / Experiments），每块独立提交 LLM 分析，最后汇总。"
 
 ### 4.4 降级策略
 
@@ -355,7 +363,11 @@ score = w1 * citation_count + w2 * recency_bonus + w3 * citation_type_bonus + w4
 
 ---
 
-## 6. 技术路线分析与对比
+## 6. 技术路线分析与对比 [可选功能]
+
+技术路线分析是 V3 的**可选增强功能**，由 `V3_ROUTE_ANALYSIS_ENABLED` 环境变量控制（默认关闭）。当用户需要理解论文在领域中的技术定位和演进脉络时，可手动开启。
+
+启用前提：至少完成 Phase 1-4，且有 ≥ 2 篇已分析的关键论文。
 
 ### 6.1 按技术路线聚类（替代 V2 的向量聚类）
 
@@ -441,7 +453,15 @@ baseline 的确定方式：
 
 ## 7. Markdown 输出格式
 
-最终输出是一篇完整的结构化报告，分为以下章节：
+最终输出是一篇完整的结构化报告。章节内容根据运行模式和数据可用性动态调整：
+
+- **基础分析模式**（routes=None, comparison=None）：§1-5 + §8（参考文献分类，有条件）
+- **完整分析模式**（routes 和 comparison 有数据）：§1-7 + §8（参考文献分类，有条件）
+
+各章节根据对应数据是否可用自动显隐：
+- §6 领域技术路线 — 仅在 `routes` 不为 None 时渲染
+- §7 对比分析 — 仅在 `comparison` 不为 None 时渲染
+- §8 参考文献分类 — 仅在分类结果非空时渲染
 
 ### 7.1 输出结构
 
@@ -485,7 +505,7 @@ baseline 的确定方式：
 
 ---
 
-## 6. 领域技术路线
+## 6. 领域技术路线 [仅完整分析模式]
 
 ### 6.1 技术路线全景
 （用文字 + 表格描述当前领域的几个主要技术分支）
@@ -500,7 +520,7 @@ baseline 的确定方式：
 
 ---
 
-## 7. 对比分析
+## 7. 对比分析 [仅完整分析模式]
 ### 7.1 与主流路线的设计差异
 ### 7.2 独特贡献定位
 
@@ -529,11 +549,14 @@ baseline 的确定方式：
 | 实验结果数据 | 数字不变，仅翻译指标描述 |
 | 引用分类表 | 论文标题保留原文，说明性文字翻译 |
 
-最终输出两个文件：
+最终输出以下文件：
+
 ```
 output/v3/YYYY-MM-DD_title-slug/
-├── paper_analysis.md      # 英文版
-└── paper_analysis.zh.md   # 中文版
+├── paper_analysis.md       # 英文版（完整结构化报告）
+├── paper_analysis.zh.md    # 中文版（LLM 后置翻译）
+├── seed_paper.json         # 种子论文完整元数据
+└── citation_graph.json     # 引用关系图数据
 ```
 
 翻译时保留 Markdown 格式、表格和链接，仅替换自然语言文字。
@@ -625,9 +648,8 @@ paper_context_tool/
 │       └── YYYY-MM-DD_title-slug/
 │           ├── paper_analysis.md       # 结构化分析报告（英文）
 │           ├── paper_analysis.zh.md    # 结构化分析报告（中文）
-│           ├── seed_paper.pdf          # 种子论文 PDF（缓存）
-│           ├── key_papers/             # 关键论文的文本缓存
-│           └── citation_graph.json     # 引用关系数据
+│           ├── seed_paper.json         # 种子论文元数据（JSON）
+│           └── citation_graph.json     # 引用关系数据（JSON）
 │
 └── requirements.txt               # 扩展依赖
 ```
@@ -655,24 +677,34 @@ semantic-scholar-api     # Semantic Scholar API（或直接使用 requests + RES
 | `TEXT_CHUNK_OVERLAP` | `200` | 分块重叠（tokens） |
 | `V3_OUTPUT_DIR` | `output/v3` | V3 输出目录 |
 | `PAPER_CACHE_DIR` | `data/paper_cache` | PDF / 文本缓存目录 |
-| RELEVANCE_FILTER_ENABLED | `1` | (复用 V2) |
-| BRANCH_ANALYSIS_ENABLED | `1` | (复用 V2) |
+| `V3_STRUCTURED_ANALYSIS_ENABLED` | `1` | 开关：LLM 结构化分析 |
+| `V3_CITATION_MINING_ENABLED` | `1` | 开关：引用挖掘（Semantic Scholar） |
+| `V3_ROUTE_ANALYSIS_ENABLED` | `0` | **开关：技术路线归纳 + 对比分析（用户可选，默认关闭）** |
 | ... | (其余 V2 配置不变) | |
 
 ---
 
 ## 11. 成本估算（相对于 V2）
 
+### 基础分析模式（默认，`V3_ROUTE_ANALYSIS_ENABLED=0`）
+
 | 步骤 | Token 估算 | 费用（DeepSeek chat） |
 |---|---|---|
 | 结构化理解（种子论文，~5000 tokens 输入） | ~7K | ~$0.00014 |
 | 引用分类（~30 篇引用 × ~200 tokens 输入） | ~12K | ~$0.00024 |
 | 结构化理解（~10 篇关键论文 × ~5000 tokens） | ~70K | ~$0.0014 |
+| **总计（基础模式）** | **~89K** | **~$0.0018** |
+
+### 完整分析模式（`V3_ROUTE_ANALYSIS_ENABLED=1`）
+
+| 步骤 | Token 估算 | 费用（DeepSeek chat） |
+|---|---|---|
+| 基础模式总计 | ~89K | ~$0.0018 |
 | 技术路线分析 | ~5K | ~$0.0001 |
 | 对比分析 | ~3K | ~$0.00006 |
-| **总计** | **~97K** | **~$0.002** |
+| **总计（完整模式）** | **~97K** | **~$0.002** |
 
-每次运行约 $0.002，比 V2 高一个数量级但依然极低。如果使用 GPT-4，成本会显著增加（约 $0.5-1.0）。
+每次运行约 $0.0018-$0.002，比 V2 高一个数量级但依然极低。如果使用 GPT-4，成本会显著增加（约 $0.5-1.0）。
 
 ### PDF 处理成本
 
@@ -692,11 +724,11 @@ semantic-scholar-api     # Semantic Scholar API（或直接使用 requests + RES
 | 引用分类 | LLM 分类 | 全部标记为 not_classified | 全部标记为 not_classified |
 | 递归展开 | ✅ | ✅（不依赖 LLM） | 有限展开 |
 | 关键论文分析 | 全文结构化分析 | 摘要级分析 | 跳过 |
-| 技术路线归纳 | LLM 分析 | 两步降级：① LLM 提取 technical_tags 后，用 Jaccard 相似度做 manual grouping（无需额外 LLM 调用）② 完全无 LLM 时，按年份分组 + 按 technical keywords 相同度合并（基于 paper.keywords / 标题 TF-IDF） | 跳过 |
-| 对比分析 | LLM 生成对比表格 + 文本描述 | 仅输出技术标签对比矩阵（种子论文标签 vs 每组的共有标签），无自然语言描述 | 跳过 |
-| Markdown 输出 | 完整报告 | 简化报告 | 简化报告 |
+| 技术路线归纳 | 用户可选（`V3_ROUTE_ANALYSIS_ENABLED=1` 时启用）。LLM 分析 | 两步降级：① LLM 提取 technical_tags 后，用 Jaccard 相似度做 manual grouping（无需额外 LLM 调用）② 完全无 LLM 时，按年份分组 + 按 technical keywords 相同度合并（基于 paper.keywords / 标题 TF-IDF） | 跳过 |
+| 对比分析 | 用户可选（依赖 Phase 5 完成）。LLM 生成对比表格 + 文本描述 | 仅输出技术标签对比矩阵（种子论文标签 vs 每组的共有标签），无自然语言描述 | 跳过 |
+| Markdown 输出 | 完整报告（基础模式）或含路线分析的完整报告（完整模式） | 简化报告 | 简化报告 |
 
-**降级原则**（与 V2 一致）：每一步独立降级，单点故障不中断 pipeline。
+**降级原则**（与 V2 一致）：每一步独立降级，单点故障不中断 pipeline。技术路线分析本身作为可选功能，关闭时不影响基础报告质量。
 
 ---
 
