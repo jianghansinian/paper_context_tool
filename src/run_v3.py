@@ -14,7 +14,9 @@ Examples:
 from __future__ import annotations
 
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import config
@@ -28,6 +30,8 @@ from text_extractor import extract_text_from_pdf
 from domains.ai_ml import EXPERIMENTAL_PROFILE
 from domain_detector import detect_domain
 from paper_type_detector import detect_paper_type
+
+_MAX_PDF_WORKERS = 4
 
 
 def _print_separator(title: str) -> None:
@@ -178,27 +182,99 @@ def main():
 
     if key_papers and config.V3_STRUCTURED_ANALYSIS_ENABLED:
         _print_separator(f"Phase 4: Analyzing {len(key_papers)} key papers")
-        analyzed = 0
-        for i, paper in enumerate(key_papers):
-            # Directly download PDF (skip redundant metadata fetch that hits arXiv API)
-            if paper.arxiv_id and not paper.full_text:
+
+        # ── 4a: Parallel PDF download ──
+        pdf_failures: list[tuple[str, str, str]] = []  # (arxiv_id, title, reason)
+        download_candidates = [p for p in key_papers if p.arxiv_id and not p.full_text]
+        print_lock = threading.Lock()
+
+        if download_candidates:
+            print(f"  Downloading PDFs ({len(download_candidates)} papers, "
+                  f"{_MAX_PDF_WORKERS} concurrent)...")
+            completed = [0]  # mutable counter for use inside _download_one
+
+            def _download_one(paper):
                 try:
                     pdf_path = _download_arxiv_pdf(paper.arxiv_id)
                     if pdf_path:
                         paper.full_text = extract_text_from_pdf(pdf_path)
-                except Exception:
-                    pass
-                time.sleep(0.5)  # Avoid hammering arXiv servers
+                        with print_lock:
+                            completed[0] += 1
+                            print(f"  [{completed[0]}/{len(download_candidates)}] OK  "
+                                  f"{paper.title[:70]}")
+                        return None
+                    else:
+                        with print_lock:
+                            completed[0] += 1
+                            print(f"  [{completed[0]}/{len(download_candidates)}] FAIL "
+                                  f"{paper.title[:70]}")
+                        return (paper.arxiv_id, paper.title, "Download failed after retries")
+                except Exception as exc:
+                    with print_lock:
+                        completed[0] += 1
+                        print(f"  [{completed[0]}/{len(download_candidates)}] FAIL "
+                              f"{paper.title[:70]}")
+                    return (paper.arxiv_id, paper.title, str(exc))
 
-            struct = analyze_paper_structure(paper, llm_client,
-                                               profile=profile,
-                                               domain_name=domain.domain_name)
-            if struct:
-                paper.structured = struct
-                analyzed += 1
-            if (i + 1) % 3 == 0:
-                print(f"  Analyzed {i + 1}/{len(key_papers)} key papers...")
-        print(f"Successfully analyzed {analyzed}/{len(key_papers)} key papers")
+            with ThreadPoolExecutor(max_workers=_MAX_PDF_WORKERS) as executor:
+                futures = [executor.submit(_download_one, p) for p in download_candidates]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is not None:
+                        pdf_failures.append(result)
+            if pdf_failures:
+                print(f"\n  {len(pdf_failures)} PDF download(s) failed:")
+                for arxiv_id, title, reason in pdf_failures:
+                    print(f"    [{arxiv_id}] {title[:80]}")
+                    print(f"      Reason: {reason}")
+        else:
+            print("  All key papers already have full text or no arXiv ID.")
+
+        # ── 4b: Parallel LLM structured analysis ──
+        _MAX_LLM_WORKERS = 3
+        print(f"\n  Running structured analysis on {len(key_papers)} papers "
+              f"({_MAX_LLM_WORKERS} concurrent)...")
+        analyzed = [0]
+        analysis_failures: list[tuple[str, str]] = []
+
+        def _analyze_one(paper):
+            try:
+                struct = analyze_paper_structure(paper, llm_client,
+                                                  profile=profile,
+                                                  domain_name=domain.domain_name)
+                if struct:
+                    paper.structured = struct
+                    with print_lock:
+                        analyzed[0] += 1
+                        print(f"  [{analyzed[0]}/{len(key_papers)}] OK  "
+                              f"{paper.title[:70]}")
+                    return None
+                else:
+                    with print_lock:
+                        analyzed[0] += 1
+                        print(f"  [{analyzed[0]}/{len(key_papers)}] FAIL "
+                              f"{paper.title[:70]}")
+                    return (paper.title, "Analysis returned None")
+            except Exception as exc:
+                with print_lock:
+                    analyzed[0] += 1
+                    print(f"  [{analyzed[0]}/{len(key_papers)}] FAIL "
+                          f"{paper.title[:70]}")
+                return (paper.title, str(exc))
+
+        with ThreadPoolExecutor(max_workers=_MAX_LLM_WORKERS) as executor:
+            futures = [executor.submit(_analyze_one, p) for p in key_papers]
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    analysis_failures.append(result)
+
+        success_count = analyzed[0] - len(analysis_failures)
+        if analysis_failures:
+            print(f"\n  {len(analysis_failures)} analysis failure(s):")
+            for title, reason in analysis_failures:
+                print(f"    {title[:80]} — {reason}")
+        print(f"Successfully analyzed {success_count}/{len(key_papers)} key papers")
     elif key_papers:
         print("Structured analysis disabled — skipping key paper analysis.")
     else:

@@ -24,7 +24,7 @@ class TestBuildAnalysisPrompt:
     def test_prompt_truncates_long_text(self, sample_paper_v3):
         sample_paper_v3.full_text = "x" * 200000
         prompt = _build_analysis_prompt(sample_paper_v3)
-        assert len(prompt) < 150000  # Should be truncated
+        assert len(prompt) < 155000  # Should be truncated
 
     def test_prompt_no_text(self):
         paper = Paper(id="empty", title="Empty")

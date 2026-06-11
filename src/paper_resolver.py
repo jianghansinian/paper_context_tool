@@ -147,27 +147,75 @@ def _fetch_ss_metadata_by_arxiv(arxiv_id: str) -> Optional[dict]:
     }
 
 
-def _download_arxiv_pdf(arxiv_id: str) -> Optional[Path]:
-    """Download PDF from arXiv and return the local path."""
+def _download_arxiv_pdf(arxiv_id: str, timeout: int = 20) -> Optional[Path]:
+    """Download PDF from arXiv with retry and return the local path.
+
+    Retries up to 3 times with exponential backoff. On rate-limit (429)
+    waits longer. Returns None only after exhausting all attempts.
+    """
     cache_dir = config.PAPER_CACHE_DIR
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     pdf_path = cache_dir / f"{arxiv_id}.pdf"
     if pdf_path.exists():
-        print(f"Using cached PDF: {pdf_path}")
         return pdf_path
 
-    url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-    try:
-        resp = requests.get(url, timeout=config.HTTP_TIMEOUT_SEC * 2)
-        resp.raise_for_status()
-    except Exception as exc:
-        print(f"PDF download failed for {arxiv_id}: {exc}")
-        return None
+    urls = [
+        f"https://arxiv.org/pdf/{arxiv_id}.pdf",
+        f"https://arxiv.org/pdf/{arxiv_id}",
+    ]
 
-    pdf_path.write_bytes(resp.content)
-    print(f"Downloaded PDF: {pdf_path}")
-    return pdf_path
+    last_error = ""
+    for attempt in range(3):
+        try:
+            resp = requests.get(urls[0], timeout=timeout)
+            if resp.status_code == 429:
+                wait = (attempt + 1) * 8
+                last_error = "HTTP 429 rate-limited"
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            pdf_path.write_bytes(resp.content)
+            return pdf_path
+        except requests.exceptions.Timeout:
+            last_error = f"timeout ({timeout}s)"
+        except requests.exceptions.ConnectionError as exc:
+            last_error = f"connection error: {exc}"
+        except Exception as exc:
+            last_error = str(exc)
+
+        if attempt < 2:
+            wait = (attempt + 1) * 2
+            time.sleep(wait)
+
+    # Final fallback: try URL without .pdf suffix
+    try:
+        resp = requests.get(urls[1], timeout=timeout)
+        resp.raise_for_status()
+        pdf_path.write_bytes(resp.content)
+        return pdf_path
+    except Exception:
+        pass
+
+    # Last resort: try Semantic Scholar open access PDF
+    try:
+        ss_url = f"{_SS_API_BASE}/paper/ArXiv:{arxiv_id}"
+        ss_params = {"fields": "openAccessPdf"}
+        ss_resp = requests.get(ss_url, params=ss_params, headers=(
+            {"x-api-key": config.SS_API_KEY} if config.SS_API_KEY else {}
+        ), timeout=15)
+        ss_resp.raise_for_status()
+        oa = (ss_resp.json().get("openAccessPdf") or {})
+        oa_url = oa.get("url")
+        if oa_url:
+            oa_resp = requests.get(oa_url, timeout=timeout)
+            oa_resp.raise_for_status()
+            pdf_path.write_bytes(oa_resp.content)
+            return pdf_path
+    except Exception:
+        pass
+
+    return None
 
 
 def _parse_metadata_from_text(text: str) -> dict:

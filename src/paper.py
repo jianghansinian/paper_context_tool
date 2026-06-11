@@ -201,3 +201,104 @@ class Reference:
             citation_type=ct,
             is_key_reference=d.get("is_key_reference", False),
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# V4 data models — Research Narrative Engine
+# ═══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class Claim:
+    """A paper's core assertion — the atomic unit of V4 evolution modeling.
+
+    Claim is NOT a method description. It is a falsifiable judgment about
+    what works, what is better, and why.
+
+    Good: "Sparse queries can match dense BEV accuracy at 40% lower FLOPs"
+    Bad:  "We propose a sparse query mechanism for BEV detection"
+    """
+    paper_id: str
+    paper_title: str
+    year: int
+    statement: str           # The claim itself (falsifiable assertion)
+    evidence: str            # Supporting evidence (results, ablations, benchmarks)
+    problem_addressed: str   # What problem does this claim address?
+    claim_type: str          # "improves" | "extends" | "replaces" | "introduces"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Claim":
+        return cls(
+            paper_id=d.get("paper_id", ""),
+            paper_title=d.get("paper_title", ""),
+            year=d.get("year", 0),
+            statement=d.get("statement", ""),
+            evidence=d.get("evidence", ""),
+            problem_addressed=d.get("problem_addressed", ""),
+            claim_type=d.get("claim_type", "introduces"),
+        )
+
+
+@dataclass
+class Branch:
+    """A research branch/phase — coherent problem area with claim evolution chain."""
+    name: str
+    problem_statement: str
+    paper_ids: list[str] = field(default_factory=list)
+    claims: list[Claim] = field(default_factory=list)
+    narrative: str = ""        # Generated evolution story for this branch
+    is_mainstream: bool = False
+    time_range: str = ""       # e.g. "2020-2022"
+    core_paradigm: str = ""    # The shared fundamental assumption of this phase
+    claim_relations: list[dict] = field(default_factory=list)  # Paper-to-paper claim relations
+    paradigm_shifts: list[dict] = field(default_factory=list)  # Paradigm shifts within this phase
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "problem_statement": self.problem_statement,
+            "paper_ids": self.paper_ids,
+            "claims": [c.to_dict() for c in self.claims],
+            "narrative": self.narrative,
+            "is_mainstream": self.is_mainstream,
+            "time_range": self.time_range,
+            "core_paradigm": self.core_paradigm,
+            "claim_relations": self.claim_relations,
+            "paradigm_shifts": self.paradigm_shifts,
+        }
+
+
+@dataclass
+class EvolutionEdge:
+    """A directed edge in the evolution DAG — relationship between two claims."""
+    source_paper_id: str
+    target_paper_id: str
+    relation: str           # "improves" | "extends" | "replaces" | "combines"
+    description: str        # Natural language explanation
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ResearchNarrative:
+    """V4 output: a field's complete technical evolution story."""
+    field_name: str
+    seed_paper_id: Optional[str] = None
+    overview: str = ""
+    branches: list[Branch] = field(default_factory=list)
+    cross_branch_edges: list[EvolutionEdge] = field(default_factory=list)
+    synthesis: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "field_name": self.field_name,
+            "seed_paper_id": self.seed_paper_id,
+            "overview": self.overview,
+            "branches": [b.to_dict() for b in self.branches],
+            "cross_branch_edges": [e.to_dict() for e in self.cross_branch_edges],
+            "synthesis": self.synthesis,
+        }
