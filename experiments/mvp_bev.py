@@ -275,13 +275,23 @@ def main():
     print(f"\n{narrative.synthesis[:300]}...")
 
 
-def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None) -> str:
-    """Render narrative to markdown with idea-centric organization.
+def _paper_label(title: str) -> str:
+    """Extract a short readable label from a paper title."""
+    if ":" in title:
+        prefix = title.split(":")[0].strip()
+        if len(prefix) < 50:
+            return prefix
+    return title[:45] + "..." if len(title) > 45 else title
 
-    Key design decisions:
-    - Papers appear ONCE each in the claims table (primary claim only)
-    - Claim relations shown as Mermaid graph (not table)
-    - Paradigm shifts grouped by dimension (independent evolution threads)
+
+def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None) -> str:
+    """Render narrative to markdown.
+
+    Design:
+    - Claims in compact table format (multi-row per paper, no repetition)
+    - Evolution shown as Mermaid graph (primary), text tree as collapsible fallback
+    - Mermaid kept as collapsible alternative
+    - Paradigm shifts grouped by dimension
     """
     lines = [
         f"# {narrative.field_name} — 技术发展叙事",
@@ -310,77 +320,146 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
             "",
         ])
 
-        # ── Idea Evolution Graph (Mermaid) ──
+        # ── Mermaid Graph + Annotated Evolution Path ──
         relations = branch.claim_relations or []
         if relations:
+            paper_labels: dict[str, str] = {}
+            for r in relations:
+                for paper in [r["source_paper"], r["target_paper"]]:
+                    if paper not in paper_labels:
+                        paper_labels[paper] = _paper_label(paper)
+
+            # Build edge map for annotated chain
+            edges: dict[str, tuple[str, str, str]] = {}
+            for r in relations:
+                edges[r["source_paper"]] = (r["target_paper"], r["relation"], r["explanation"])
+
+            # Collect paper order and years
+            papers_in_order: list[str] = []
+            seen = set()
+            for r in relations:
+                for p in [r["source_paper"], r["target_paper"]]:
+                    if p not in seen:
+                        papers_in_order.append(p)
+                        seen.add(p)
+
+            paper_years: dict[str, str] = {}
+            for c in branch.claims:
+                if c.paper_title not in paper_years:
+                    paper_years[c.paper_title] = str(c.year)
+
+            # ── Mermaid graph ──
             lines.extend([
                 "### 思想演化图",
                 "",
                 "```mermaid",
-                "graph TD",
+                "flowchart LR",
             ])
-            # Assign node IDs and build graph
             node_ids = {}
             node_idx = 0
             for r in relations:
-                src = r["source_paper"]
-                tgt = r["target_paper"]
-                for paper in [src, tgt]:
+                for paper in [r["source_paper"], r["target_paper"]]:
                     if paper not in node_ids:
-                        node_ids[paper] = f"P{node_idx}"
+                        nid = f"P{node_idx}"
+                        node_ids[paper] = nid
                         node_idx += 1
-                        # Truncate label for readability
-                        label = paper[:50] + ("..." if len(paper) > 50 else "")
-                        year = r.get("source_year", "") if paper == src else r.get("target_year", "")
-                        lines.append(f'    {node_ids[paper]}["{label}"]')
+                        label = paper_labels[paper].replace('"', "'")
+                        lines.append(f'    {nid}["{label}"]')
 
-            # Add edges with relation labels
-            rel_styles = {
-                "attack": " ==>|⚔️ ATTACK| ",
-                "replace": " ==>|🔄 REPLACE| ",
-                "improve": " -->|🔧 IMPROVE| ",
-                "support": " -->|✅ SUPPORT| ",
-                "extend": " -->|➡️ EXTEND| ",
-                "parallel": " -.->|∥ PARALLEL| ",
-                "unknown": " -->|?| ",
-            }
             for r in relations:
                 src_id = node_ids.get(r["source_paper"], "")
                 tgt_id = node_ids.get(r["target_paper"], "")
                 if src_id and tgt_id:
-                    edge = rel_styles.get(r["relation"], f" -->|{r['relation'].upper()}| ")
+                    rel_map = {
+                        "improve": " -->|IMPROVE| ",
+                        "extend": " -->|EXTEND| ",
+                        "support": " -->|SUPPORT| ",
+                        "replace": " ==>|REPLACE| ",
+                        "attack": " ==>|ATTACK| ",
+                        "parallel": " -.->|PARALLEL| ",
+                    }
+                    edge = rel_map.get(r["relation"], f" -->|{r['relation'].upper()}| ")
                     lines.append(f"    {src_id}{edge}{tgt_id}")
 
-            lines.append("```")
-            lines.append("")
-            lines.append("> **图例**: 实线=因果关联 · 粗线=范式替代 · 虚线=并行发展(不同研究线)")
-            lines.append("")
+            lines.extend([
+                "```",
+                "",
+                "*实线=因果演化 · 粗线=范式替代 · 虚线=并行发展*",
+                "",
+            ])
 
-        # ── Papers Table (one row per paper, primary claim only) ──
-        # Deduplicate by paper_id, keep first claim as primary
-        seen_papers: dict[str, Claim] = {}
+            # ── Annotated evolution path ──
+            rel_icons = {
+                "improve": "🔧 IMPROVE",
+                "extend": "➡️ EXTEND",
+                "support": "✅ SUPPORT",
+                "replace": "🔄 REPLACE",
+                "attack": "⚔️ ATTACK",
+                "parallel": "∥ PARALLEL",
+            }
+
+            lines.extend([
+                "### 演化路径",
+                "",
+            ])
+
+            for paper in papers_in_order:
+                label = paper_labels.get(paper, paper[:50])
+                year = paper_years.get(paper, "")
+                year_str = f" ({year})" if year else ""
+                lines.append(f"**{label}**{year_str}")
+                lines.append("")
+
+                if paper in edges:
+                    tgt, rel, expl = edges[paper]
+                    icon = rel_icons.get(rel, rel.upper())
+                    tgt_label = paper_labels.get(tgt, tgt[:50])
+                    if rel == "parallel":
+                        lines.append(f"> ∥ **PARALLEL** → {tgt_label}")
+                        lines.append(f"> 不同研究线 — {expl}")
+                    else:
+                        lines.append(f"> {icon} → **{tgt_label}**")
+                        lines.append(f"> {expl}")
+                    lines.append("")
+
+        # ── Claims Table (table with multi-row per paper, clean and compact) ──
+        # Group claims by paper
+        claims_by_paper: dict[str, list[Claim]] = {}
+        paper_meta: dict[str, tuple[str, int]] = {}
         for claim in branch.claims:
-            if claim.paper_id not in seen_papers:
-                seen_papers[claim.paper_id] = claim
+            pid = claim.paper_id
+            if pid not in claims_by_paper:
+                claims_by_paper[pid] = []
+                paper_meta[pid] = (claim.paper_title, claim.year)
+            claims_by_paper[pid].append(claim)
 
-        sorted_papers = sorted(seen_papers.values(), key=lambda c: c.year)
+        sorted_pids = sorted(claims_by_paper.keys(),
+                            key=lambda pid: paper_meta[pid][1])
 
         lines.extend([
             "### 关键论文与核心主张",
             "",
-            "| 论文 | 年份 | 核心主张 | 证据 |",
-            "|------|------|---------|------|",
+            "| 论文 | 年份 | 主张 | 证据 |",
+            "|------|------|------|------|",
         ])
-        for c in sorted_papers:
-            evidence = c.evidence[:100] + "..." if len(c.evidence) > 100 else c.evidence
-            title = c.paper_title[:60] + ("..." if len(c.paper_title) > 60 else "")
-            lines.append(
-                f"| {title} | {c.year} | "
-                f"{c.statement[:100]} | {evidence} |"
-            )
+
+        for pid in sorted_pids:
+            title, year = paper_meta[pid]
+            p_claims = claims_by_paper[pid]
+            short_title = _paper_label(title)
+
+            for j, c in enumerate(p_claims):
+                paper_cell = f"**{short_title}**" if j == 0 else ""
+                year_cell = str(year) if j == 0 else ""
+                claim_text = f"{j + 1}. {c.statement}"
+                evidence = c.evidence
+                lines.append(
+                    f"| {paper_cell} | {year_cell} | {claim_text} | {evidence} |"
+                )
+
         lines.append("")
 
-    # Paradigm shifts section (dimension-grouped from P0)
+    # Paradigm shifts section
     if paradigm_shifts:
         lines.extend([
             "---",
