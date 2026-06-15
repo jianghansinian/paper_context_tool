@@ -43,37 +43,48 @@ from paper import Claim
 # ── System prompt ─────────────────────────────────────────────────────
 _PARADIGM_SHIFT_SYSTEM = """\
 You are a research historian who identifies PARADIGM SHIFTS in a field's evolution. \
-Your expertise is distinguishing between incremental method improvements and genuine \
-changes in what the research community believes.
+Your expertise is distinguishing between TECHNIQUE EVOLUTION (methods improve but \
+the field's core beliefs stay the same) and PARADIGM SHIFTS (the field's consensus \
+about what problem matters and how to solve it fundamentally changes).
 
-A paradigm shift is NOT:
-- "Paper B uses attention instead of convolution" (method substitution)
-- "Paper B achieves +3% NDS over Paper A" (incremental improvement)
-- "Paper B proposes a novel module" (architectural novelty)
+CRITICAL DISTINCTION — Paradigm Shift vs Technique Evolution:
 
-A paradigm shift IS:
-- The field's CORE RESEARCH QUESTION changed (e.g., from "how to fuse cameras" \
-  to "how to reduce computational cost")
-- A fundamental ASSUMPTION was overturned (e.g., from "dense BEV is necessary" \
-  to "sparse queries suffice")
+TECHNIQUE EVOLUTION (NOT a paradigm shift):
+- "Single-frame perception → temporal fusion" — The core belief ("dense BEV is \
+  necessary") didn't change; researchers just added a new input dimension.
+- "Depth from lidar → depth from stereo" — The belief ("explicit depth labels \
+  are needed") didn't change; the source of depth labels changed.
+- "CNN backbone → Transformer backbone" — Architecture substitution within the \
+  same paradigm.
+- "Better temporal fusion via recurrence" — Improving a known technique.
+- Any improvement where the field's RESEARCH QUESTION and SUCCESS CRITERIA \
+  remain the same.
+
+PARADIGM SHIFT (return these):
+- The field's CORE RESEARCH QUESTION changed (e.g., from "how to build a better \
+  dense BEV grid" to "do we even need a BEV grid?")
+- A fundamental ASSUMPTION was overturned (e.g., from "dense BEV grid is \
+  necessary" to "sparse queries can replace it entirely")
 - The DEFINITION OF SUCCESS changed (e.g., from "accuracy at any cost" to \
-  "accuracy per FLOP")
+  "planning safety is the ultimate metric")
 - Two previously separate approaches MERGED into a unified framework
 - A once-promising direction was ABANDONED by the community
 
-To detect a paradigm shift, ask:
-1. After this paper, did researchers ask DIFFERENT QUESTIONS?
-2. Did this paper change what the field considers "obvious" or "given"?
-3. Did the evaluation criteria fundamentally change after this work?
-4. Would a researcher from before this shift find the new approach unintelligible
-   without understanding the shift itself?
+LITMUS TEST: Would a researcher from before this shift find the new approach \
+UNINTELLIGIBLE or OBVIOUSLY WRONG without understanding the shift itself? \
+If yes → paradigm shift. If they'd see it as a natural improvement → technique \
+evolution.
+
+You MUST return AT MOST 3 paradigm shifts. If you find more than 3, keep only \
+the 3 most fundamental ones (those that changed the research question or core \
+assumption, not the method or evaluation). Quality over quantity.
 
 Return ONLY a JSON object. No other text."""
 
 _PARADIGM_SHIFT_PROMPT = """\
-Identify the paradigm shifts in this field's evolution. A paradigm shift is when \
+Identify the PARADIGM SHIFTS in this field's evolution. A paradigm shift is when \
 the field's fundamental assumptions, research questions, or success criteria changed \
-— NOT when a method incrementally improved.
+— NOT when a method incrementally improved or a technique evolved.
 
 FIELD: {field_name}
 
@@ -89,53 +100,59 @@ PHASES (LLM-identified paradigm eras):
 RESEARCH TENSIONS (field-level contradictions):
 {tensions_text}
 
-Identify 3-6 paradigm shifts. Each shift should represent a moment when the field's \
-understanding fundamentally changed. Focus on shifts in the CLAIM SPACE — what \
-researchers believed to be true — not just changes in method names.
+Identify AT MOST 3 paradigm shifts. A paradigm shift must pass the LITMUS TEST: \
+would a researcher from before this shift find the new approach fundamentally \
+wrong or unintelligible? If they'd see it as a natural improvement, it's technique \
+evolution, not a paradigm shift.
 
-IMPORTANT DISTINCTIONS:
-- "Better depth estimation" within the same paradigm → NOT a shift
-- "Depth doesn't need to be explicit; attention can learn geometry" → IS a shift \
-  (assumption overturned)
-- "Sparse queries can replace dense BEV grids" → IS a shift (research question changed \
-  from "how to build better BEV" to "do we even need BEV?")
-- "Planning and perception should be jointly optimized" → IS a shift (evaluation \
-  criterion changed from task-specific metrics to open-loop planning safety)
+EXAMPLES OF WHAT NOT TO INCLUDE (these are technique evolution):
+- "Single-frame → Temporal fusion" — Adding temporal input doesn't change the \
+  core paradigm; the field still believes in the same representation and goals.
+- "Fixed backbone → Backbone-agnostic" — Engineering improvement, not a belief change.
+- "O(T) temporal storage → O(1) recurrent fusion" — Algorithmic efficiency gain \
+  within the same paradigm.
+
+EXAMPLES OF WHAT TO INCLUDE:
+- "Dense BEV grid necessary → Sparse queries sufficient" — Fundamental assumption \
+  overturned about what representation is needed.
+- "Modular pipeline → End-to-end planning-oriented system" — The definition of \
+  success changed from per-task metrics to planning safety.
+- "Explicit depth supervision essential → Learned geometry via attention" — Core \
+  belief about what information is needed changed.
 
 For each shift, identify:
 - The old paradigm (what the field believed before)
 - The new paradigm (what the field believed after)
 - Catalyst papers (which papers triggered or crystallized this shift)
-- Magnitude (paradigm_shift, optimization, incremental, convergence, dead_end)
+- Magnitude: use "paradigm_shift" only for fundamental assumption overturns. \
+  Use "optimization" for substantial efficiency gains that changed SOTA expectations \
+  but not core beliefs. Use "convergence" for merging of separate paradigms.
 - Level (research_question, method, evaluation)
-- Dimension: which ASPECT of the system this shift belongs to:
-  - "representation" — how the scene/world is represented (dense grid, sparse query, vectorized)
-  - "geometry" — how 3D geometry/depth is inferred (explicit depth, learned attention, hybrid)
-  - "system" — how the pipeline is architected (modular, unified, end-to-end)
-  - "evaluation" — what metrics/standards define success (accuracy, efficiency, safety)
+- Dimension: representation, geometry, system, evaluation
 
 MAGNITUDE GUIDE:
 - paradigm_shift: A core assumption was overturned; the field cannot go back
-- optimization: Same paradigm, but a substantially more efficient/effective \
-  implementation that changed SOTA expectations
-- convergence: Two previously separate approaches merged into one framework
-- dead_end: A direction the field pursued but largely abandoned
+- optimization: Same paradigm, substantially more efficient implementation
+- convergence: Two separate approaches merged into one framework
+
+YOUR RESPONSE MUST CONTAIN AT MOST 3 SHIFTS. If tempted to add more, keep only \
+the most fundamental ones.
 
 Return JSON:
 ```json
 {{
   "paradigm_shifts": [
     {{
-      "shift_name": "string (short label, e.g. 'Explicit Depth → Learned Geometry')",
+      "shift_name": "string (short label, e.g. 'Dense BEV → Sparse Representation')",
       "description": "string (2-3 sentences: what changed, why it mattered, how the field was different after)",
       "old_paradigm": "string (what the field believed before)",
       "new_paradigm": "string (what the field believed after)",
       "catalyst_papers": ["paper_title", ...],
-      "magnitude": "paradigm_shift|optimization|convergence|dead_end",
+      "magnitude": "paradigm_shift|optimization|convergence",
       "level": "research_question|method|evaluation",
       "dimension": "representation|geometry|system|evaluation",
       "phase": "string (which LLM-identified phase this shift belongs to)",
-      "year_range": "string (e.g. '2022-2022')"
+      "year_range": "string (e.g. '2022-2023')"
     }}
   ]
 }}

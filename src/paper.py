@@ -255,6 +255,7 @@ class Branch:
     core_paradigm: str = ""    # The shared fundamental assumption of this phase
     claim_relations: list[dict] = field(default_factory=list)  # Paper-to-paper claim relations
     paradigm_shifts: list[dict] = field(default_factory=list)  # Paradigm shifts within this phase
+    tensions: list[dict] = field(default_factory=list)  # Research tensions relevant to this phase
 
     def to_dict(self) -> dict:
         return {
@@ -268,6 +269,7 @@ class Branch:
             "core_paradigm": self.core_paradigm,
             "claim_relations": self.claim_relations,
             "paradigm_shifts": self.paradigm_shifts,
+            "tensions": self.tensions,
         }
 
 

@@ -303,6 +303,7 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
         "---",
     ]
 
+    # ── Pass 1: All phase narratives ──────────────────────────────────
     for i, branch in enumerate(narrative.branches, 1):
         header = f"## {i + 1}. {branch.name}"
         if branch.time_range:
@@ -320,7 +321,21 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
             "",
         ])
 
-        # ── Mermaid Graph + Annotated Evolution Path ──
+    # ── Paradigm shifts (right after narratives, before paper details) ──
+    if paradigm_shifts:
+        lines.extend([
+            "---",
+            "",
+            shifts_to_markdown(paradigm_shifts),
+        ])
+
+    # ── Pass 2: All branch details (graph + path + claims) ────────────
+    for i, branch in enumerate(narrative.branches, 1):
+        lines.extend([
+            f"### {branch.name} — 演化细节",
+            "",
+        ])
+
         relations = branch.claim_relations or []
         if relations:
             paper_labels: dict[str, str] = {}
@@ -422,8 +437,7 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
                         lines.append(f"> {expl}")
                     lines.append("")
 
-        # ── Claims Table (table with multi-row per paper, clean and compact) ──
-        # Group claims by paper
+        # ── Claims Table ──
         claims_by_paper: dict[str, list[Claim]] = {}
         paper_meta: dict[str, tuple[str, int]] = {}
         for claim in branch.claims:
@@ -459,15 +473,7 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
 
         lines.append("")
 
-    # Paradigm shifts section
-    if paradigm_shifts:
-        lines.extend([
-            "---",
-            "",
-            shifts_to_markdown(paradigm_shifts),
-        ])
-
-    # Research tensions section
+    # ── Research tensions ──
     if tensions:
         lines.extend([
             "---",
@@ -479,6 +485,7 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
             tensions_to_markdown(tensions),
         ])
 
+    # ── Synthesis ──
     lines.extend([
         "---",
         "",

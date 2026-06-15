@@ -25,25 +25,30 @@ computer vision. You write technical evolution narratives that capture how a \
 field's collective understanding shifts over time.
 
 Your writing style:
-- Field-centric: the protagonist is the RESEARCH COMMUNITY'S UNDERSTANDING, \
-not individual papers
-- Phase-driven: organize around paradigm shifts and changing consensus, not \
-paper chronology
-- Causal: explain WHY understanding shifted, not just WHAT methods appeared
+- TENSION-DRIVEN: The protagonist is the UNRESOLVED CONTRADICTION or PROBLEM \
+that forces the field forward. Each paragraph should center on a TENSION — a \
+specific contradiction, limitation, or unanswered question — then name the \
+paper(s) that responded to it. Never organize by paper chronology ("Then Paper \
+X appeared and did Y").
+- Field-centric: the story is about how the research community's understanding \
+shifted, not about individual papers as sequential topics
+- Causal: explain WHY each tension emerged from the resolution of the previous \
+one, and HOW specific papers resolved or transformed it
 - Specific: use concrete method names, metrics, and mechanisms as evidence
-- Concise: every sentence advances the story
+- Concise: every sentence advances the tension chain
 
-A good field-centric narrative:
-1. Opens with the CONSENSUS BELIEF at the start of a phase
-2. Shows what DISCOVERY or FAILURE cracked that consensus
-3. Traces how the NEW UNDERSTANDING stabilized
-4. Ends with what the field learned — and what TENSION carried into the next phase
+A good tension-driven narrative:
+1. Opens with the CONSENSUS BELIEF at the phase start
+2. Names a TENSION that emerged within that consensus (a contradiction, \
+a performance ceiling, an unsolved sub-problem)
+3. Shows which PAPER(s) responded to this tension, what they discovered, \
+and what NEW TENSION their resolution created
+4. Continues this TENSION → PAPER → NEW TENSION chain through the phase
+5. Ends with the UNRESOLVED TENSION that carries into the next phase
 
-CRITICAL: Write like an expert lecturer. Papers are the characters who drive the \
-story — name them naturally as you explain what each contributed and why it mattered. \
-The narrative arc is the field's changing understanding; papers are the agents of \
-that change. Never write "Paper A does X, then Paper B does Y" as a dry catalog — \
-but DO name the papers as you tell the story of how understanding evolved.
+PAPERS are characters who respond to tensions — name them naturally with year \
+when they act: "BEVDepth (2022) resolved this by showing that explicit depth \
+supervision could push NDS past 60%." Not "Then BEVDepth was proposed."
 
 CALIBRATION RULE: This analysis is based on a LIMITED SET of papers within this \
 specific narrative scope. The field is larger and more complex. You MUST use \
@@ -55,8 +60,8 @@ finality. Specifically:
 - INSTEAD write: "within this trajectory, X emerged as a strong alternative", \
   "the evidence from these papers suggested that...", "this pointed toward X \
   as a promising direction", "X gained significant traction"
-- When describing paradigm shifts, qualify: "Within the scope of these papers, \
-  a shift occurred from X to Y" — not "The field abandoned X for Y"
+- When describing shifts in understanding, qualify: "Within the scope of these \
+  papers, a shift occurred from X to Y"
 - Anchor every strong claim to a specific paper's evidence: "SparseBEV (2023) \
   demonstrated that..." not "Sparse representations are superior to dense ones"
 
@@ -66,7 +71,7 @@ Return ONLY a JSON object. No other text."""
 # ── Per-branch narrative prompt ───────────────────────────────────────
 _PHASE_NARRATIVE_PROMPT = """\
 Write a technical evolution story for this research phase — the story of how \
-the field's collective understanding evolved during this period.
+the field's understanding evolved, driven by tensions and contradictions.
 
 PHASE: {phase_name} ({time_range})
 DRIVING PROBLEM: {problem_statement}
@@ -81,41 +86,54 @@ CLAIM EVOLUTION CHAIN (chronological):
 
 {paradigm_shifts}
 
-STRUCTURE YOUR NARRATIVE AS A PROFESSOR'S LECTURE ON HOW UNDERSTANDING EVOLVED:
+STRUCTURE YOUR NARRATIVE AS A TENSION CHAIN:
 
-1. INITIAL CONSENSUS — What did the field believe at the start? What was \
-the shared assumption? Name the key paper(s) that established this consensus.
+1. INITIAL CONSENSUS — Open with what the field believed at the phase start. \
+What was the shared assumption? Name the key paper(s) that established it. \
+(1 paragraph)
 
-2. DISCOVERIES THAT RESHAPED UNDERSTANDING — Walk through each major turning \
-point. For each: name the paper, state what it discovered, explain WHY it \
-changed people's minds, and use concrete metrics as evidence. Show how each \
-discovery led to or forced the next one.
+2. TENSION CHAIN — This is the core of the narrative. For each major JUNCTURE \
+where the field's understanding shifted:
 
-3. CULMINATION & UNRESOLVED TENSION — What new understanding emerged? What \
-became the new baseline? Name the paper(s) that crystallized this. What \
-problem remained unsolved that motivated the NEXT phase?
+   a. NAME THE TENSION — What contradiction, limitation, or unsolved problem \
+   emerged? State it as a specific tension (e.g., "Dense BEV grids gave accuracy \
+   but imposed O(H×W) computational cost that made real-time deployment \
+   impractical").
+
+   b. PAPER RESPONSE — Which paper(s) responded to this tension? Name them with \
+   year. What did they discover or propose? Use concrete metrics.
+
+   c. NEW UNDERSTANDING — How did the field's belief change as a result? What \
+   became the new "obvious"?
+
+   d. NEW TENSION — What contradiction or unsolved problem did THIS resolution \
+   create? This becomes the seed for the next turn of the chain.
+
+   The TENSION CHAIN should feel like a causal sequence: each resolution creates \
+   a new tension, which forces the next response. Papers are the actors; tensions \
+   are the plot. End the chain when you reach the phase boundary.
+
+3. UNRESOLVED TENSION — What contradiction or open problem remains at the phase \
+end? This is the tension that carries into the next phase. (1 paragraph)
 
 CRITICAL RULES:
-- Write like a professor explaining a field's history — papers are CHARACTERS, \
-their discoveries are plot points, the field's evolving understanding is the arc
-- Introduce paper names naturally with year: "LSS (2020) showed that..." not \
-"Then LSS was proposed..." The name anchors the idea, not the sentence structure
-- Don't write disembodied statements like "The field realized..." when a specific \
-paper drove the realization. Instead: "BEVDepth (2022) revealed that depth \
-supervision could push NDS past 60% — the first camera-only method to do so."
-- Connect causally: "this finding forced researchers to reconsider..."
-- End each paragraph with a sentence that bridges to the next discovery
-- Use concrete metrics as evidence of WHY the belief changed
-- When a claim ATTACKS or REPLACES a prior one, make this the dramatic center \
-of the story — these are paradigm shifts, not incremental improvements
-- PARADIGM SHIFTS (provided above) are the key turning points. Build the narrative \
-ARC around them — each shift is a moment when the field's beliefs fundamentally \
-changed. The story should make the reader feel the ground shifting under their feet.
-- CALIBRATION: This narrative is based on a LIMITED paper set. Use hedged language. \
-Never write "the paradigm shift was complete" or "the era was over" or "X was \
-superior." Instead: "within this trajectory, X gained traction," "the evidence \
-from these papers pointed toward X," "X emerged as a promising direction." \
-Anchor every strong claim to a specific paper's evidence.
+- NEVER organize by paper chronology ("Then X did Y, then Z did W"). ORGANIZE BY \
+  TENSION: "But a tension emerged: X. Paper Y responded by... However, this \
+  created a new problem: Z."
+- Each paragraph should start with a TENSION or PROBLEM, not a paper name
+- Name papers as characters that respond to tensions: "Sparse4D (2022) challenged \
+  this assumption by..." — not "Sparse4D proposed..."
+- When a claim ATTACKS or REPLACES a prior one, make this the dramatic center — \
+  these are paradigm-shift moments where a tension fundamentally changed the field
+- PARADIGM SHIFTS (provided above) mark turning points. Build the tension chain \
+  around these shifts
+- Use concrete metrics as evidence that a tension was real and a resolution worked
+- End each tension-response cycle with a bridge to the next tension
+- When a paper pair is marked PARALLEL: note them as independent responses to \
+  different tensions, do NOT chain them causally
+- CALIBRATION: Use hedged language. Never claim definitive victory. Anchor every \
+  strong claim to a specific paper. "Within this trajectory, X gained traction" \
+  not "X was proven superior."
 
 Return JSON:
 ```json
@@ -370,6 +388,7 @@ def build_narrative(
                 core_paradigm=b.get("core_paradigm", ""),
                 claim_relations=b.get("claim_relations", []),
                 paradigm_shifts=b.get("paradigm_shifts", []),
+                tensions=b.get("tensions", []),
             )
             branch_objects.append(bobj)
 
