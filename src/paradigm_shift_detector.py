@@ -334,15 +334,10 @@ def format_shifts_for_narrative(
 
 
 def shifts_to_markdown(shifts: list) -> str:
-    """Render paradigm shifts as a markdown section, grouped by dimension.
+    """Render paradigm shifts as a compact list — 0-5 one-line conclusions.
 
-    Each dimension represents an independent evolution thread:
-    - representation: dense grid → sparse query → vectorized
-    - geometry: explicit depth → learned attention → hybrid
-    - system: modular → unified → end-to-end
-    - evaluation: accuracy → efficiency → safety
-
-    Accepts list[ParadigmShift] or list[dict].
+    V8.1: No Mermaid, no dimension grouping, no expanded descriptions.
+    Each shift is one bullet: Name (year_range).
     """
     if not shifts:
         return ""
@@ -352,96 +347,10 @@ def shifts_to_markdown(shifts: list) -> str:
             return getattr(s, key, default)
         return s.get(key, default)
 
-    # Group shifts by dimension
-    dimension_order = ["representation", "geometry", "system", "evaluation"]
-    dimension_labels = {
-        "representation": "表示范式 (Representation)",
-        "geometry": "几何范式 (Geometry)",
-        "system": "系统范式 (System)",
-        "evaluation": "评估范式 (Evaluation)",
-    }
-    dimension_icons = {
-        "representation": "🗺️",
-        "geometry": "📐",
-        "system": "⚙️",
-        "evaluation": "📊",
-    }
-
-    grouped: dict[str, list] = {}
+    lines = []
     for s in shifts:
-        dim = _get(s, "dimension", "system")
-        if dim not in grouped:
-            grouped[dim] = []
-        grouped[dim].append(s)
+        name = _get(s, "shift_name", "")
+        period = _get(s, "year_range", "?")
+        lines.append(f"- **{name}** ({period})")
 
-    magnitude_icons = {
-        "paradigm_shift": "🔴 PARADIGM SHIFT",
-        "optimization": "🟡 OPTIMIZATION",
-        "convergence": "🔵 CONVERGENCE",
-        "dead_end": "⚫ DEAD END",
-        "incremental": "⚪ INCREMENTAL",
-    }
-
-    lines = [
-        "> 技术发展史的本质是范式的更替。以下按维度分组展示该领域经历的根本性信念转变，",
-        "> 每个维度是一条独立的思想演化线。",
-        "",
-    ]
-
-    # Render Mermaid overview diagram of all dimensions
-    lines.append("### 范式演化全景")
-    lines.append("")
-    lines.append("```mermaid")
-    lines.append("graph LR")
-    for dim in dimension_order:
-        if dim in grouped:
-            dim_shifts = grouped[dim]
-            for idx, s in enumerate(dim_shifts):
-                old = _get(s, "old_paradigm", "")[:55]
-                new = _get(s, "new_paradigm", "")[:55]
-                shift_name = _get(s, "shift_name", "")[:35]
-                node_from = f'{dim}_old_{idx}'
-                node_to = f'{dim}_new_{idx}'
-                lines.append(f'    {node_from}["{old}"] -->|"{shift_name}"| {node_to}["{new}"]')
-    lines.append("```")
-    lines.append("")
-
-    # Render each dimension as a section
-    for dim in dimension_order:
-        if dim not in grouped:
-            continue
-
-        dim_shifts = grouped[dim]
-        icon = dimension_icons.get(dim, "")
-        label = dimension_labels.get(dim, dim)
-        lines.append(f"### {icon} {label}")
-        lines.append("")
-
-        for s in dim_shifts:
-            name = _get(s, "shift_name", "")
-            mag = _get(s, "magnitude", "")
-            lvl = _get(s, "level", "?")
-            period = _get(s, "year_range", "?")
-            old = _get(s, "old_paradigm", "")
-            new = _get(s, "new_paradigm", "")
-            desc = _get(s, "description", "")
-            cat = _get(s, "catalyst_papers", [])
-
-            mag_label = magnitude_icons.get(mag, mag.upper())
-            level_label = lvl.replace("_", " ").title()
-
-            lines.append(f"**{name}** ({period})")
-            lines.append(f"{mag_label} | {level_label}")
-            lines.append("")
-            lines.append(f"> **前**: *{old}*")
-            lines.append("")
-            lines.append(f"> **后**: *{new}*")
-            lines.append("")
-            lines.append(desc)
-            lines.append("")
-
-            if cat:
-                lines.append(f"**代表论文**: {' · '.join(cat)}")
-            lines.append("")
-
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + ("\n" if lines else "")

@@ -497,10 +497,10 @@ class NarrativeSection:
 
 @dataclass
 class ResearchNarrative:
-    """V8 output: a field's complete technical evolution story.
+    """V8.1 output: a field's complete technical evolution story.
 
-    Organized by Phase (NarrativeSection), linked by causal chain.
-    RQs are Phase content, not chapter titles.
+    Idea-centric: papers are footnotes, ideas (Phase/Debate/Turning Point) are
+    the protagonists. Direction is 3-line compact. Evidence not repeated 3x.
     """
     field_name: str
     seed_paper_id: Optional[str] = None
@@ -512,6 +512,8 @@ class ResearchNarrative:
     tensions: list[Tension] = field(default_factory=list)
     claims: list[Claim] = field(default_factory=list)
     claim_relations: list[ClaimRelation] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    reading_list: list[dict] = field(default_factory=list)
     synthesis: str = ""
 
     def to_dict(self) -> dict:
@@ -526,5 +528,7 @@ class ResearchNarrative:
             "tensions": [t.to_dict() for t in self.tensions],
             "claims": [c.to_dict() for c in self.claims],
             "claim_relations": [r.to_dict() for r in self.claim_relations],
+            "open_questions": self.open_questions,
+            "reading_list": self.reading_list,
             "synthesis": self.synthesis,
         }

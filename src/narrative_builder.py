@@ -28,192 +28,149 @@ from paper import (
 
 # ── System prompt: professor teaching a lecture ────────────────────────
 _NARRATIVE_SYSTEM = """\
-You are a professor teaching a graduate seminar. Your students need you to show \
-HOW the field's thinking evolved through TIME — not just WHAT papers were published.
+You are a historian of science writing for an audience that wants to understand \
+HOW ideas evolved — not a chronological catalog of papers.
 
-TEACHING MODEL (V8: Phase-Centric):
-- Course organized into PHASES — time periods, each with a core contradiction
-- Phases linked by CAUSAL CHAINS: Phase N's unsolved problem → Phase N+1's motivation
-- Each phase opens with its CORE QUESTION, then answers it through paper debates
-- Papers are WITNESSES: what did they argue, what evidence did they bring
-- Tensions are the narrative spine: "The field was split..."
+WRITING MODEL: Idea-Centric History
+- Each phase is defined by its CORE IDEA (what the field DISCOVERED), not by \
+  which papers happened to be published in that period.
+- Papers are FOOTNOTES to ideas, not the story itself. Mention them in passing: \
+  "X showed Y (Paper, YEAR)." Do NOT give each paper its own subsection with \
+  contribution/limitation bullet points.
+- Lead with the INSIGHT, then name the paper that crystallized it. NOT the reverse.
+- Example of idea-centric writing:
+  "The key discovery of this phase was that sparsity itself was not the \
+  bottleneck — adaptability was. Sparse4D (2022) proved sparse detection \
+  was viable. SparseBEV (2023) then showed it could surpass dense methods. \
+  Sparse4Dv2 solved the remaining temporal efficiency problem."
+  This is one paragraph. Three papers, one idea. No bullet points.
 
 TIME DISCIPLINE — CRITICAL:
-- You are writing about ONE phase at a time. Each phase has a specific time range.
 - ONLY reference papers that exist WITHIN or BEFORE this phase's time range.
 - If a phase ends in 2022, do NOT mention results from 2023 or 2024 papers.
-- A 2020-2022 phase narrative must NOT cite SparseBEV (2023) or SparseDrive (2024).
 - You may mention that a problem REMAINS UNSOLVED, but do not name future solvers.
 
-FORMATTING RULES — for student readability:
-- **Bold** every paper name, every key metric (e.g. **60.9 NDS**), and every core \
-  concept on first mention. Students skim for bold text.
-- Paragraphs: 2-4 sentences MAX. Break at every logical turn. No walls of text.
-- Use bullet points when comparing papers or listing contributions/limitations:
-  - **X**: what it proposed
-  - **Y**: how it responded
-- Each phase opens with the CORE QUESTION as a bold, standalone sentence.
-- End each phase with ONE memorable takeaway (bold), like "LSS taught us to \
-  project; BEVFormer taught us to remember; SparseBEV taught us to be selective."
-
-CALIBRATION:
-- This analysis is based on a LIMITED SET of papers. The field is larger.
-- NEVER claim definitive closure. Use: "within this trajectory, the evidence \
-  pointed toward", "the papers analyzed here suggest"
-- Direction confidence (high/medium/low) reflects the strength of evidence \
-  WITHIN THE PAPERS YOU CAN CITE, not the full field.
+FORMAT:
+- **Bold** core concepts and paper names on first mention. NOT every metric value.
+- Paragraphs: 2-4 sentences MAX.
+- Each phase: CORE QUESTION (bold) → SETUP (1-2 sentences) → CORE DISCOVERY \
+  (idea, with paper examples inline) → TURNING POINT (1 sentence) → \
+  **TAKEAWAY** (one bold sentence) → UNSOLVED (1-2 sentences).
+- Do NOT repeat the same evidence multiple times in the same phase.
+- Avoid listing paper contributions/limitations as bullet points.
 
 Return ONLY a JSON object. No other text."""
 
 
 # ── Per-phase narrative prompt (V8: DeepSeek-style lecture) ────────────
 _PHASE_NARRATIVE_PROMPT = """\
-You are teaching a section of your graduate lecture on {field_name}.
+Write a concise historical account of this phase in {field_name}.
 
 THIS PHASE: **{phase_name}** ({time_range})
 
-TIME DISCIPLINE: You may ONLY reference papers from {time_range} or earlier.
-Papers from AFTER {time_range} do NOT exist in this lecture section.
+TIME DISCIPLINE: ONLY papers from {time_range} or earlier exist in this phase.
 
-PREVIOUS PHASE'S UNSOLVED PROBLEM:
-"{prev_unresolved}"
+PREVIOUS UNSOLVED PROBLEM: "{prev_unresolved}"
 
 CORE CONTRADICTION: {core_contradiction}
-
 CORE DEBATE: {core_debate}
 
-KEY PAPERS (chronological):
+KEY PAPERS (these are the facts — use them as evidence, not as the story):
 {key_papers}
 
-TENSIONS within this phase:
+KEY TENSIONS:
 {tensions_text}
 
-RESEARCH QUESTIONS:
-{questions_text}
-
-WHERE THE EVIDENCE POINTS (within this phase only):
-{direction_text}
-
-RELATIONSHIPS:
+EVOLUTIONARY RELATIONSHIPS (within this phase):
 {claim_relations}
 
 ---
-LECTURE STRUCTURE — follow this flow EXACTLY:
+WRITE THE NARRATIVE as a concise historical synthesis, following this structure:
 
-1. **CORE QUESTION** — Start with the central question this phase wrestled with, \
-   as a bold standalone sentence. This is the lecture's title question.
+1. **CORE QUESTION** — Bold standalone sentence. The question this phase wrestled with.
 
-2. SETUP (1-2 sentences MAX) — Briefly reference the previous phase's unsolved \
-   problem, then pivot to this phase's core question. Do NOT repeat \
-   "{prev_unresolved}" verbatim — rephrase it briefly.
+2. SETUP — 1-2 sentences. Briefly reference the previous phase's unsolved problem.
 
-3. THE DEBATES — Walk through papers chronologically. For EACH key paper:
+3. CORE DISCOVERY — This is the heart of the narrative. Lead with the IDEA, not \
+   the papers:
+   - First state what the phase DISCOVERED or RESOLVED (the conceptual advance).
+   - Then give examples: mention 2-4 key papers inline, each in ONE sentence: \
+     "X demonstrated Y (**Paper**, YEAR)."
+   - Group papers that share the same conclusion into a single idea statement.
+   - Do NOT write "Paper A... then Paper B... then Paper C" — start with the \
+     common thread and use papers as supporting examples.
+   - Mention a metric ONLY if it's the turning-point number. Don't list NDS for \
+     every paper.
 
-   **Paper Name** (YEAR)
-   - **贡献**: What it proposed. What problem it solved. Concrete metric if available.
-   - **局限或引发的争论**: What it couldn't solve, or how another paper challenged it.
+4. TURNING POINT — 1 sentence. What specific result shifted the debate?
 
-   Connect papers with short transition paragraphs (1-2 sentences). Show the \
-   back-and-forth: "But then **X** demonstrated something unexpected..."
+5. **TAKEAWAY** — One bold memorable sentence. Like "Sparsity was never the \
+   problem — adaptability was."
 
-4. TURNING POINT (2-3 sentences) — What specific result shifted the debate? \
-   State where the evidence pointed WITHIN THIS PHASE'S time window.
+6. UNSOLVED — 1 sentence ending: "But this created a new problem: {unresolved_problem}"
 
-5. **TAKEAWAY** — One memorable bold sentence summarizing this phase's lesson. \
-   Like: "**LSS** lifted pixels to 3D; **BEVFormer** taught grids to remember."
-
-6. UNSOLVED (1-2 sentences) — End with: "But this created a new problem: \
-   {unresolved_problem}" This is the hook for the next lecture.
-
----
-FORMATTING RULES:
-- **Bold** EVERY paper name, metric value, and core concept on first mention.
-- Paragraphs: 2-4 sentences MAX. Break at every logical turn.
-- Use bullet points (-) for paper contributions/limitations.
-- No section numbering in the output — use bold headers and bullet points.
-- The unresolved problem at the end MUST logically connect to the next phase.
+AVOID:
+- Paper-by-paper summaries with contribution/limitation bullet points
+- Repeating the same evidence that appears in the Direction block
+- Listing every metric for every paper
 
 Return JSON:
 ```json
-{{
-  "narrative": "..."
-}}
+{{"narrative": "..."}}
 ```"""
 
 
 # ── Field overview prompt (V8: Phase预告) ─────────────────────────────
 _FIELD_OVERVIEW_PROMPT = """\
-Write a concise opening lecture that introduces {field_name}.
+Write a ONE-PARAGRAPH field overview for {field_name}. Be concise and structured.
 
-PHASES (time periods with causal chain):
+PHASES:
 {phases_text}
-
-RESEARCH QUESTIONS:
-{questions_text}
 
 PARADIGM SHIFTS:
 {shifts_text}
 
-STRUCTURE — three short paragraphs:
+Write exactly ONE paragraph (4-6 sentences) that covers:
+- The field's starting point and first breakthrough
+- The N phases (name each, 1 sentence each)
+- The overall trajectory (dense→sparse, modular→end-to-end, etc.)
 
-PARAGRAPH 1 (2-3 sentences): The original breakthrough. What was the field's \
-starting point? What was the first big idea?
-
-PARAGRAPH 2 (3-4 sentences): Announce the phases. "We'll trace this through N \
-eras:" Name each phase, its time range, and its core question in ONE sentence each.
-
-PARAGRAPH 3 (2-3 sentences): The through-line. What 2-3 questions cut across all \
-phases? What's the overall trajectory?
-
-RULES:
-- Short paragraphs (3 sentences max). No walls of text.
-- **Bold** phase names and key concepts.
-- Reference only papers from the claims provided.
+Use **bold** for phase names and key concepts. No bullet points, no section breaks.
 
 Return JSON:
 ```json
-{{
-  "overview": "..."
-}}
+{{"overview": "..."}}
 ```"""
 
 
 # ── Synthesis prompt ──────────────────────────────────────────────────
 _SYNTHESIS_PROMPT = """\
-Write the concluding lecture that synthesizes what we've learned across all \
-the phases.
-
-FIELD: {field_name}
+Write the concluding section for {field_name}. Three outputs needed.
 
 PHASE SUMMARIES:
 {phase_summaries}
 
-OVERVIEW:
-{overview}
+ALL CLAIMS (for reading list):
+{claims_text}
 
-Your synthesis must have TWO clearly separated parts:
+1. SYNTHESIS — ONE paragraph (3-4 sentences) summarizing the overall trajectory \
+   across all phases. What changed and why? Use **bold** for key concepts.
 
-PART 1 — WHAT THE EVIDENCE SHOWS (Evidence-Backed Conclusions):
-Identify 2-3 definitive patterns that are directly supported by the papers analyzed.
-For each:
-- State the pattern
-- Name the specific papers and results that support it
-- Explain the causal mechanism across phases
+2. OPEN QUESTIONS — 0-3 questions the field still hasn't resolved, based on \
+   the unsolved problems at the end of each phase. Return as a list of strings. \
+   If no clear open questions, return an empty list.
 
-PART 2 — WHAT WE STILL DON'T KNOW (Speculative Directions):
-Identify 1-2 open questions or plausible future directions. These are inferences \
-BEYOND what the papers directly prove. For each:
-- State the direction with a confidence qualifier
-- Explicitly flag: "This is speculation, not a conclusion from the analyzed papers."
-
-CRITICAL: Students must be able to distinguish what the evidence shows from what \
-you're speculating about. Label clearly.
+3. READING LIST — Group key papers by phase. For each paper, provide: \
+   title, year, one-sentence contribution. Return as a list of objects: \
+   [{{"phase": "Phase Name", "title": "...", "year": 2022, "contribution": "..."}}]
+   Include at most 12 papers total across all phases — pick the most important.
 
 Return JSON:
 ```json
 {{
-  "evidence_backed": "string (2-3 evidence-backed conclusions)",
-  "speculative": "string (1-2 speculative future directions, clearly flagged)"
+  "synthesis": "...",
+  "open_questions": ["question 1?", "question 2?"],
+  "reading_list": [{{"phase": "...", "title": "...", "year": 2022, "contribution": "..."}}]
 }}
 ```"""
 
@@ -365,9 +322,9 @@ def build_narrative(
     overview = _generate_field_overview_v8(
         client, model, field_name, phases, research_questions, paradigm_shifts)
 
-    # Generate synthesis
-    synthesis = _generate_synthesis_v8(
-        client, model, field_name, sections, section_narratives, overview)
+    # Generate synthesis + open questions + reading list
+    synthesis, open_questions, reading_list = _generate_synthesis_v8(
+        client, model, field_name, sections, section_narratives, overview, claims)
 
     return ResearchNarrative(
         field_name=field_name,
@@ -380,6 +337,8 @@ def build_narrative(
         tensions=tensions if isinstance(tensions, list) else [],
         claims=claims,
         claim_relations=claim_relations if isinstance(claim_relations, list) else [],
+        open_questions=open_questions,
+        reading_list=reading_list,
         synthesis=synthesis,
     )
 
@@ -676,36 +635,28 @@ def _format_rqs_for_phase(rqs: list[ResearchQuestion]) -> str:
 
 
 def _format_direction_for_phase(direction, phase_time_range: str = "") -> str:
-    """Format direction for phase narrative prompt, with time scoping."""
+    """Format direction for phase — compact 3-line output."""
     if not direction:
-        return "(No structured direction — infer from the evidence within this phase only)"
+        return "(No structured direction)"
 
     if hasattr(direction, 'statement'):
-        stmt, sup, opp, conf, ev = (
+        stmt, sup, opp, conf = (
             direction.statement, direction.support_papers,
-            direction.opposing_papers, direction.confidence,
-            direction.evidence_summary)
+            direction.opposing_papers, direction.confidence)
     else:
         stmt = direction.get('statement', '')
         sup = direction.get('support_papers', [])
         opp = direction.get('opposing_papers', [])
         conf = direction.get('confidence', 'medium')
-        ev = direction.get('evidence_summary', '')
 
-    scope_note = ""
-    if phase_time_range:
-        scope_note = f" (only papers up to {phase_time_range.split('-')[-1].strip() if '-' in phase_time_range else phase_time_range})"
+    all_papers = sup[:3] + opp[:3]
+    why = ", ".join(all_papers) if all_papers else "(none)"
 
-    lines = [
-        f"Direction (WITHIN THIS PHASE{scope_note}): {stmt}",
+    return "\n".join([
+        f"Direction: {stmt}",
         f"Confidence: {conf}",
-        f"Supporting papers (from this phase or earlier): {', '.join(sup[:5])}" if sup else "Supporting papers: (none in this phase)",
-    ]
-    if opp:
-        lines.append(f"Opposing papers: {', '.join(opp[:5])}")
-    if ev:
-        lines.append(f"Key evidence: {ev}")
-    return "\n".join(lines)
+        f"Why: {why}",
+    ])
 
 
 def _format_relations_for_prompt(relations: list) -> str:
@@ -854,17 +805,24 @@ def _generate_synthesis_v8(
     sections: list[NarrativeSection],
     section_narratives: dict[str, str],
     overview: str,
-) -> str:
-    """Generate concluding synthesis."""
+    claims: list[Claim],
+):
+    """Generate synthesis, open questions, and reading list."""
     phase_summaries = "\n\n".join(
         f"--- {s.title} ---\n{section_narratives.get(s.phase.name if hasattr(s, 'phase') and s.phase else s.title, '')}"
         for s in sections
     )
 
+    # Build claims text for reading list generation
+    claims_lines = []
+    for c in claims:
+        claims_lines.append(f"[{c.year}] {c.paper_title}: {c.statement[:120]}")
+    claims_text = "\n".join(claims_lines[:30])  # limit to avoid prompt bloat
+
     prompt = _SYNTHESIS_PROMPT.format(
         field_name=field_name,
         phase_summaries=phase_summaries,
-        overview=overview,
+        claims_text=claims_text,
     )
 
     try:
@@ -879,24 +837,13 @@ def _generate_synthesis_v8(
             timeout=config.LLM_ANALYZER_TIMEOUT_SEC,
         )
         raw = response.choices[0].message.content or ""
-        evidence = _parse_json_field(raw, "evidence_backed") or ""
-        speculative = _parse_json_field(raw, "speculative") or ""
-
-        if evidence and speculative:
-            return (
-                f"### Evidence-Backed Conclusions\n\n{evidence}\n\n"
-                f"### Speculative Future Directions\n\n"
-                f"> _The following is extrapolation beyond the analyzed papers. "
-                f"It reflects plausible trajectories, not established fact._\n\n"
-                f"{speculative}"
-            )
-        elif evidence:
-            return f"### Evidence-Backed Conclusions\n\n{evidence}"
-        parsed = _parse_json_field(raw, "synthesis")
-        return parsed or evidence or ""
+        synthesis = _parse_json_field(raw, "synthesis") or ""
+        open_questions = _parse_json_list(raw, "open_questions") or []
+        reading_list = _parse_json_list_of_dicts(raw, "reading_list") or []
+        return synthesis, open_questions, reading_list
     except Exception as exc:
         print(f"Synthesis generation failed: {exc}")
-        return ""
+        return "", [], []
 
 
 def _parse_json_field(raw: str, field: str) -> Optional[str]:
@@ -915,3 +862,36 @@ def _parse_json_field(raw: str, field: str) -> Optional[str]:
         if m:
             return m.group(1).replace("\\n", "\n").replace('\\"', '"')
     return None
+
+
+def _parse_json_list(raw: str, field: str) -> Optional[list]:
+    """Extract a list field from a JSON response."""
+    if not raw or not raw.strip():
+        return None
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            val = data.get(field, [])
+            return val if isinstance(val, list) else []
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def _parse_json_list_of_dicts(raw: str, field: str) -> Optional[list[dict]]:
+    """Extract a list of dicts field from a JSON response."""
+    if not raw or not raw.strip():
+        return None
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            val = data.get(field, [])
+            if isinstance(val, list):
+                return [item for item in val if isinstance(item, dict)]
+    except json.JSONDecodeError:
+        pass
+    return []

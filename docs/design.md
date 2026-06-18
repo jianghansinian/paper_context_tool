@@ -275,22 +275,24 @@ class NarrativeSection:
 
 @dataclass
 class ResearchNarrative:
-    """V8 输出：一个领域的完整技术发展故事。
+    """V8.1 输出：一个领域的完整技术发展故事。
 
-    V8: 按 Phase 组织（NarrativeSection），Phase 间有因果链。
-    RQ 退居 Phase 内容，Tension 经过两阶段检测（细粒度 → Phase 聚类）。
+    V8.1: idea-centric 叙事。论文退居脚注，思想（Phase/Debate/Turning Point）
+    成为叙事主角。Direction 精简为 3 行结论。证据不重复三次。
     """
     field_name: str
     seed_paper_id: Optional[str]
-    overview: str                        # 领域全景 — 3 短段（突破+Phase预告+主线）
-    sections: list[NarrativeSection]     # 按 Phase 分节（V8: 1 section = 1 Phase）
-    phases: list[Phase]                  # V8 新增: 时间阶段列表
-    research_questions: list[ResearchQuestion]  # Phase 内情节
-    paradigm_shifts: list[ParadigmShift]
-    tensions: list[Tension]             # 细粒度张力
+    overview: str                        # 领域全景 — 1 短段（原 3 段压缩）
+    sections: list[NarrativeSection]     # 按 Phase 分节
+    phases: list[Phase]
+    research_questions: list[ResearchQuestion]
+    paradigm_shifts: list[ParadigmShift] # 0-5 条，渲染为一句结论
+    tensions: list[Tension]
     claims: list[Claim]
     claim_relations: list[ClaimRelation]
-    synthesis: str                       # 趋势与展望（Evidence-Backed + Speculative）
+    open_questions: list[str]            # V8.1 新增: 0-3 条开放问题
+    reading_list: list[dict]             # V8.1 新增: 按 Phase 分组的阅读列表
+    synthesis: str                       # 趋势总结（Evidence-Backed 合并了 Speculative）
 ```
 
 **已移除的模型：**
@@ -515,35 +517,36 @@ Phase F: 范式转移检测 (paradigm_shift_detector)
   ├─ LLM 识别 2-3 个根本性转变
   └─ 输出: list[ParadigmShift]
 
-Phase G: 叙事生成 (narrative_builder) ← V8 Phase-based + DeepSeek 风格
+Phase G: 叙事生成 (narrative_builder) ← V8.1 idea-centric + GPT 结构
   ├─ 输入: Claim + ClaimRelation + Phase + ResearchQuestion + ParadigmShift
-  ├─ V8: 每个 Phase 生成一个 NarrativeSection（章节 = Phase，非 RQ）
+  ├─ V8.1: Idea-centric 叙事 — 论文退居脚注，思想成主角
   │   section title = Phase 名称（问题驱动，如 "How to Build a 3D View from 2D Images? (2020-2022)"）
-  ├─ TIME DISCIPLINE（关键约束）:
+  ├─ TIME DISCIPLINE（关键约束，同 V8）:
   │   ├─ 每个 Phase 只能引用该时间范围内或更早的论文
   │   ├─ section_claims/section_relations 按 phase_max_year 过滤
-  │   │   └─ Mermaid 图: 只保留 src 和 tgt 都在 involved_papers 内的 relation
-  │   ├─ Direction support_papers/opposing_papers 按年份过滤（无 fallback，避免泄漏）
-  │   │   └─ evidence_summary 文本也需过滤: 不引用 phase 时间范围之后的论文
-  │   ├─ Direction 必须 phase-specific: 按关键词匹配选择最佳 RQ，不同 Phase 不应出现完全相同 Direction
-  │   ├─ Direction support_papers/opposing_papers 按年份过滤（无 fallback，避免泄漏）
-  │   └─ Prompt 显式声明: "Papers from AFTER {time_range} do NOT exist in this lecture"
-  ├─ Phase 内叙事结构（DeepSeek 风格）:
+  │   ├─ Mermaid 图: 只保留双方都在 phase 内的 relation
+  │   ├─ Direction: year-filtered + phase-specific keyword matching
+  │   └─ 排除后续 Phase 的 key_papers（boundary guard）
+  ├─ Phase 内叙事结构（idea-centric）:
   │   1. CORE QUESTION — 本 Phase 的核心问题，粗体独立句
-  │   2. SETUP (1-2 句) — 简要承接上一阶段遗留问题（不重复 verbatim）
-  │   3. THE DEBATES — 按论文时间顺序，每篇:
-  │      - 粗体论文名 + 年份
-  │      - 分点: - **贡献**: ... / - **局限或引发的争论**: ...
-  │      - 过渡句连接相邻论文（"But then X demonstrated something unexpected..."）
-  │   4. TURNING POINT — 什么证据/论文推动方向
-  │   5. TAKEAWAY — 一句粗体金句总结本阶段教训
-  │   6. UNSOLVED — 遗留问题（→ 下一阶段的 hook）
-  ├─ 格式规则（来自 DeepSeek 分析）:
+  │   2. SETUP (1-2 句) — 简要承接上一阶段遗留问题
+  │   3. CORE DISCOVERY (2-4 句) — 这个阶段的 IDEA 是什么（非论文列表）
+  │      - 先讲核心发现/转折，再举例论文（论文是"比如"而非"然后"）
+  │      - 论文名粗体，括号年份，一句贡献，不展开全文
+  │      - 格式: "X showed Y (Paper, YEAR). Z later demonstrated W (Paper, YEAR)."
+  │   4. TURNING POINT (1 句) — 什么证据推动方向
+  │   5. TAKEAWAY — 一句粗体金句
+  │   6. UNSOLVED — 遗留问题（→ 下一阶段 hook）
+  ├─ 格式规则:
   │   ├─ 段落: 2-4 句 MAX，每个逻辑转折处分段
-  │   ├─ 粗体: 所有论文名、指标数值、核心概念首次出现
-  │   ├─ 分点: 论文对比用 bullet points
-  │   └─ 章节标题: 问题驱动命名（"How/Can/Should...?"），不用静态标签
-  ├─ Overview: 3 段（原始突破 + Phase 预告 + 贯穿主线），短段落
+  │   ├─ 粗体: 核心概念、论文名（首次出现）、关键数字
+  │   ├─ 不逐篇展开论文贡献/局限 bullet points — 那是 paper summary 的写法
+  │   ├─ 章节标题: 问题驱动命名
+  │   └─ 避免重复同一证据（Narrative 讲过的数字 Direction 不再重复）
+  ├─ Direction 精简为 3 行:
+  │   1 行结论 + 1 行置信度 + 1 行 Why（论文名列表，不展开）
+  ├─ Overview: 1 短段，不拆 3 段
+  ├─ Synthesis 输出 open_questions (0-3) + reading_list
   └─ 输出: ResearchNarrative
 
 Phase H: 导出
@@ -796,48 +799,46 @@ Prompt 核心：
 #### 4.3.7 markdown_report_builder.py
 **目标**：生成最终 Narrative 报告。
 
-**输出结构**（V8: 统一 Phase 章节，叙事+证据一体化）：
+**输出结构**（V8.1: GPT 建议结构）：
 ```markdown
 # [领域名称] — 技术发展叙事
 
-## 1. 领域全景
-（3 短段: 原始突破 + Phase 预告 + 贯穿主线）
+## 1. Field Overview
+（1 短段，结构清晰、换行合理、小标题）
 
----
+## 2. Major Paradigm Shifts（0-5 条）
+（每条一句结论，无 Mermaid，无分维度展开）
+- Dense BEV Grid → Sparse Queries (2022-2024)
+- Explicit Depth Supervision → Learned Geometry via Attention (2022)
+- Modular Pipeline → End-to-End Planning-Oriented System (2022-2024)
 
-## 2. Phase 1: "How to Build a 3D View from 2D Images?" (2020-2022)
-> **核心矛盾**: ...
-> **核心辩论**: ...
+## 3. Phase Evolution
 
-### 2.1 技术叙事
-（DeepSeek 风格: 短段落 + 粗体 + 分点论文分析 + Takeaway）
+### 3.1 Phase 1: "How to Build a 3D View from 2D Images?" (2020-2022)
+> **核心矛盾**: ... | **核心辩论**: ...
 
-### 2.2 方向判断
-（Phase 特定 Direction: supporting/opposing 仅含本 Phase 时间范围内的论文）
+（idea-centric 叙事: 核心发现 → 举例 → 转折 → Takeaway → Unsolved）
 
-### 2.3 论文演化
-  #### 思想演化图（Mermaid）
-  #### 演化路径（边+解释）
-  #### 关键论文与核心主张（Claims 表格）
+#### 思想演化图（Mermaid）
 
-> **→ 遗留问题**: ...
+#### 关键论文与核心主张（Claims 表格）
 
----
-
-## 3. Phase 2: ...
+### 3.2 Phase 2: ...
 ...
 
----
+## 4. Open Questions（0-3 条）
+- How to handle long-tail scenarios in sparse end-to-end systems?
+- Is there a hybrid representation that optimally balances dense/sparse?
 
-## 核心范式转移
-（跨 Phase 总结，按维度分组）
-
-## 核心研究张力
-（细粒度 tension 表格，200 字符描述）
-
-## 领域趋势与展望
-（Evidence-Backed + Speculative）
+## 5. Reading List
+（按 Phase 分组的论文列表，含标题、年份、一句贡献）
 ```
+**已移除的内容（V8.1）**:
+- Direction 独立 block — 证据已融入 Narrative
+- 核心研究张力 表格 — 过于详细，Tension 信息已在 Phase 叙事中体现
+- Evidence-Backed/Speculative 分节 — 合并为 Open Questions
+- 演化路径（边+解释）— 重复 Mermaid 图的信息
+- 范式演化 Mermaid 全景图 + 按维度展开 — 压缩为一句结论列表
 ---
 
 ## 5. V3 与 V4 的交互
