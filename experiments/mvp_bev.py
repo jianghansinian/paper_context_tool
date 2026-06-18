@@ -79,6 +79,7 @@ def main():
                 title=arxiv_meta.get("title", mp["title"]),
                 authors=arxiv_meta.get("authors", []),
                 year=arxiv_meta.get("year", 0),
+                month=arxiv_meta.get("month", 0),
                 abstract=arxiv_meta.get("abstract", ""),
                 url=arxiv_meta.get("url", f"https://arxiv.org/abs/{arxiv_id}"),
                 source="arxiv",
@@ -92,6 +93,7 @@ def main():
                     title=arxiv_meta.get("title", mp["title"]),
                     authors=arxiv_meta.get("authors", []),
                     year=arxiv_meta.get("year", 0),
+                    month=arxiv_meta.get("month", 0),
                     abstract="",
                     url=arxiv_meta.get("url", f"https://arxiv.org/abs/{arxiv_id}"),
                     source="arxiv",
@@ -122,6 +124,11 @@ def main():
         claims = extract_claims(paper, client=client)
         all_claims.extend(claims)
         print(f"  [{i + 1}/{len(papers)}] {paper.title[:50]} — {len(claims)} claims")
+
+    # Propagate month from papers to claims
+    _paper_month = {p.title: getattr(p, 'month', 0) for p in papers}
+    for c in all_claims:
+        c.month = _paper_month.get(c.paper_title, 0)
 
     total_claims = len(all_claims)
     print(f"\n  Total: {total_claims} claims")
@@ -266,7 +273,7 @@ def main():
 
     # Generate markdown
     md_path = output_dir / "bev_evolution.md"
-    md_text = _render_markdown(narrative, all_claims, all_tensions, paradigm_shifts, phases)
+    md_text = _render_markdown(narrative, all_claims, all_tensions, paradigm_shifts, phases, papers)
     md_path.write_text(md_text, encoding="utf-8")
     print(f"\nMarkdown report: {md_path}")
     print(f"JSON data: {data_path}")
@@ -292,7 +299,7 @@ def _paper_label(title: str) -> str:
     return title[:45] + "..." if len(title) > 45 else title
 
 
-def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None, phases=None) -> str:
+def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None, phases=None, papers=None) -> str:
     """Render narrative to markdown — V8.1: idea-centric, compact output.
 
     Structure (§2 Overview → §3 Paradigm Shifts → §4 Phase Evolution
@@ -309,6 +316,11 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None,
         narrative.overview,
         "",
     ]
+
+    # Phase overview table (领域全景表格)
+    if phases:
+        lines.append(phases_to_markdown(phases))
+        lines.append("")
 
     # ── §2 Paradigm Shifts (0-5 compact bullets) ──────────────────────────
     shifts = paradigm_shifts or []
@@ -334,11 +346,9 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None,
         lines.append(f"### 3.{i} {phase_name}")
         lines.append("")
 
-        # Phase metadata (compact blockquote)
+        # Phase metadata (compact: core contradiction + debate, no redundant question)
         if hasattr(section, 'phase') and section.phase:
             p = section.phase
-            if p.dominant_question:
-                lines.append(f"> **核心问题**: {p.dominant_question}")
             lines.append(f"> **核心矛盾**: {p.core_contradiction}")
             lines.append(f"> **核心辩论**: {p.core_debate}")
             if i > 1 and hasattr(narrative.sections[i - 2], 'phase') and narrative.sections[i - 2].phase:
@@ -400,47 +410,30 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None,
                 "",
             ])
 
-            # Cross-phase outgoing transitions (source in this phase, target in next phase)
-            if i < len(narrative.sections):
-                next_phase = narrative.sections[i]
-                next_key_papers = set()
-                if hasattr(next_phase, 'phase') and next_phase.phase:
-                    next_key_papers = set(next_phase.phase.key_papers or [])
-                all_relations = narrative.claim_relations or []
-                cross = []
-                for r in all_relations:
-                    src = r.source_paper if hasattr(r, 'source_paper') else r["source_paper"]
-                    tgt = r.target_paper if hasattr(r, 'target_paper') else r["target_paper"]
-                    if src in paper_labels and tgt in next_key_papers:
-                        rel = r.relation if hasattr(r, 'relation') else r["relation"]
-                        if rel in ("replace", "attack"):
-                            cross.append((src, tgt, rel))
-                if cross:
-                    items = []
-                    for src, tgt, rel in cross:
-                        src_label = paper_labels.get(src, src[:30])
-                        tgt_label = _paper_label(tgt)
-                        tag = "替代" if rel == "replace" else "挑战"
-                        items.append(f"{src_label} → {tgt_label} [{tag}]")
-                    lines.append(f"*范式转折: {'; '.join(items)}*")
-                    lines.append("")
 
         # Claims table — filtered to phase key_papers to avoid time-range overlap
         all_section_claims = section.claims or []
         key_paper_set = set(key_papers)
         section_claims = [c for c in all_section_claims if c.paper_title in key_paper_set]
         if section_claims:
+            # Build paper_id -> month lookup from papers list
+            month_map: dict[str, int] = {}
+            if papers:
+                for p in papers:
+                    month_map[p.id] = getattr(p, 'month', 0)
+
             claims_by_paper: dict[str, list[Claim]] = {}
-            paper_meta: dict[str, tuple[str, int]] = {}
+            paper_meta: dict[str, tuple[str, int, int]] = {}
             for claim in section_claims:
                 pid = claim.paper_id
                 if pid not in claims_by_paper:
                     claims_by_paper[pid] = []
-                    paper_meta[pid] = (claim.paper_title, claim.year)
+                    m = month_map.get(pid, 0)
+                    paper_meta[pid] = (claim.paper_title, claim.year, m)
                 claims_by_paper[pid].append(claim)
 
             sorted_pids = sorted(claims_by_paper.keys(),
-                                key=lambda pid: paper_meta[pid][1])
+                                key=lambda pid: (paper_meta[pid][1], paper_meta[pid][2]))
 
             lines.extend([
                 "**关键论文与核心主张**",
@@ -450,13 +443,16 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None,
             ])
 
             for pid in sorted_pids:
-                title, year = paper_meta[pid]
+                title, year, month = paper_meta[pid]
                 p_claims = claims_by_paper[pid]
                 short_title = _paper_label(title)
 
                 for j, c in enumerate(p_claims):
                     paper_cell = f"**{short_title}**" if j == 0 else ""
-                    year_cell = str(year) if j == 0 else ""
+                    if j == 0:
+                        year_cell = f"{year}-{month:02d}" if month > 0 else str(year)
+                    else:
+                        year_cell = ""
                     claim_text = f"{j + 1}. {c.statement}"
                     evidence = c.evidence
                     lines.append(

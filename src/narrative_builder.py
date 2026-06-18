@@ -53,9 +53,13 @@ TIME DISCIPLINE — CRITICAL:
 FORMAT:
 - **Bold** core concepts and paper names on first mention. NOT every metric value.
 - Paragraphs: 2-4 sentences MAX.
-- Each phase: CORE QUESTION (bold) → SETUP (1-2 sentences) → CORE DISCOVERY \
-  (idea, with paper examples inline) → TURNING POINT (1 sentence) → \
-  **TAKEAWAY** (one bold sentence) → UNSOLVED (1-2 sentences).
+- Each section MUST start with a bold sub-heading on its own line. \
+  Use these EXACT sub-headings:
+  **背景** (1-2 sentences) → **核心发现** (the idea, with paper examples inline, \
+  2-3 paragraphs with natural breaks) → **转折点** (1 sentence) → \
+  **关键认知** (one bold memorable sentence) → **遗留问题** (1-2 sentences).
+- Do NOT include a "核心问题" heading or repeat the phase question — it is \
+  already shown in the phase metadata above.
 - Do NOT repeat the same evidence multiple times in the same phase.
 - Avoid listing paper contributions/limitations as bullet points.
 
@@ -87,38 +91,34 @@ EVOLUTIONARY RELATIONSHIPS (within this phase):
 {claim_relations}
 
 ---
-WRITE THE NARRATIVE as a concise historical synthesis, following this structure:
+WRITE THE NARRATIVE as a concise historical synthesis. Each section MUST start
+with its bold sub-heading on its own line, followed by the content. Use blank
+lines between sections and between distinct idea groups within **核心发现**.
 
-1. **CORE QUESTION** — Bold standalone sentence. The question this phase wrestled with.
+**背景** — {setup_instruction}. 1-2 sentences, no more.
 
-2. SETUP — {setup_instruction}
+**核心发现** — The heart of the narrative. 2-3 short paragraphs separated by blank \
+   lines:
+   - Paragraph 1: State the conceptual advance this phase DISCOVERED. No paper names.
+   - Paragraph 2: How it unfolded — mention 2-3 key papers inline, ONE sentence \
+     each: "X showed Y (**Paper**, YEAR)." Group papers by shared conclusion. \
+     Use a new paragraph for each distinct approach or sub-idea.
+   - If there were two clearly parallel approaches, use bullet points to contrast:
+     - **Approach A** (Paper, YEAR): what it did...
+     - **Approach B** (Paper, YEAR): what it did...
+   - Mention a metric ONLY if it was the turning-point result.
+   - Paragraph 3 (optional): the synthesis — what this means for the field.
 
-3. CORE DISCOVERY — This is the heart of the narrative. Lead with the IDEA, not \
-   the papers:
-   - First state what the phase DISCOVERED or RESOLVED (the conceptual advance).
-   - Then give examples: mention 2-4 key papers inline, each in ONE sentence: \
-     "X demonstrated Y (**Paper**, YEAR)."
-   - Group papers that share the same conclusion into a single idea statement.
-   - Do NOT write "Paper A... then Paper B... then Paper C" — start with the \
-     common thread and use papers as supporting examples.
-   - Mention a metric ONLY if it's the turning-point number. Don't list NDS for \
-     every paper.
+**转折点** — 1 sentence. What result shifted the debate?
 
-4. TURNING POINT — 1 sentence. What specific result shifted the debate?
+**关键认知** — ONE bold sentence. Memorable, like an aphorism.
 
-5. **TAKEAWAY** — One bold memorable sentence. Like "Sparsity was never the \
-   problem — adaptability was."
+**遗留问题** — 1 sentence: "But this created a new problem: ..."
 
-6. UNSOLVED — 1 sentence ending: "But this created a new problem: {unresolved_problem}"
-
-AVOID:
-- Paper-by-paper summaries with contribution/limitation bullet points
-- Repeating the same evidence that appears in the Direction block
-- Listing every metric for every paper
-
-FORMAT: Use paragraph breaks (blank line) between each section (CORE QUESTION, SETUP,
-CORE DISCOVERY, TURNING POINT, TAKEAWAY, UNSOLVED). The CORE DISCOVERY should be
-2-3 paragraphs with natural breaks between idea groups.
+TIGHT WRITING:
+- No sentence over 25 words. Break long sentences.
+- No repetition of ideas already stated.
+- Do NOT include 核心问题 heading — it's in the phase title.
 
 Return JSON:
 ```json
@@ -128,20 +128,18 @@ Return JSON:
 
 # ── Field overview prompt (V8: Phase预告) ─────────────────────────────
 _FIELD_OVERVIEW_PROMPT = """\
-Write a ONE-PARAGRAPH field overview for {field_name}. Be concise and structured.
+Write a BRIEF field overview for {field_name}. The phases are already described \
+in detail in a table and individual sections below — do NOT repeat them here.
 
-PHASES:
+PHASES (for context only):
 {phases_text}
 
 PARADIGM SHIFTS:
 {shifts_text}
 
-Write exactly ONE paragraph (4-6 sentences) that covers:
-- The field's starting point and first breakthrough
-- The N phases (name each, 1 sentence each)
-- The overall trajectory (dense→sparse, modular→end-to-end, etc.)
-
-Use **bold** for phase names and key concepts. No bullet points, no section breaks.
+Write exactly 2-3 sentences covering ONLY the overall trajectory — the starting \
+point, the key paradigm shifts, and where the field ended up. Use **bold** for \
+key concepts. Do NOT list individual phases, papers, or metrics.
 
 Return JSON:
 ```json
@@ -833,7 +831,9 @@ def _generate_synthesis_v8(
     # Build claims text for reading list generation
     claims_lines = []
     for c in claims:
-        claims_lines.append(f"[{c.year}] {c.paper_title}: {c.statement[:120]}")
+        m = getattr(c, 'month', 0)
+        date_str = f"{c.year}-{m:02d}" if m > 0 else str(c.year)
+        claims_lines.append(f"[{date_str}] {c.paper_title}: {c.statement[:120]}")
     claims_text = "\n".join(claims_lines[:30])  # limit to avoid prompt bloat
 
     prompt = _SYNTHESIS_PROMPT.format(

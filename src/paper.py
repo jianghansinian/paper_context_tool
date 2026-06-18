@@ -121,6 +121,7 @@ class Paper:
     title: str = ""
     authors: list[str] = field(default_factory=list)
     year: int = 0
+    month: int = 0
     abstract: str = ""
     full_text: Optional[str] = None
     citation_count: int = 0
@@ -137,6 +138,7 @@ class Paper:
             "title": self.title,
             "authors": self.authors,
             "year": self.year,
+            "month": self.month,
             "abstract": self.abstract,
             "full_text": self.full_text,
             "citation_count": self.citation_count,
@@ -158,6 +160,7 @@ class Paper:
             title=d.get("title", ""),
             authors=d.get("authors", []),
             year=d.get("year", 0),
+            month=d.get("month", 0),
             abstract=d.get("abstract", ""),
             full_text=d.get("full_text"),
             citation_count=d.get("citation_count", 0),
@@ -221,6 +224,7 @@ class Claim:
     paper_id: str
     paper_title: str
     year: int
+    month: int
     statement: str           # The claim itself (falsifiable assertion)
     evidence: str            # Supporting evidence (results, ablations, benchmarks)
     problem_addressed: str   # What problem does this claim address?
@@ -236,6 +240,7 @@ class Claim:
             paper_id=d.get("paper_id", ""),
             paper_title=d.get("paper_title", ""),
             year=d.get("year", 0),
+            month=d.get("month", 0),
             statement=d.get("statement", ""),
             evidence=d.get("evidence", ""),
             problem_addressed=d.get("problem_addressed", ""),

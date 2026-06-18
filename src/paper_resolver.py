@@ -91,6 +91,7 @@ def _fetch_arxiv_metadata(arxiv_id: str) -> Optional[dict]:
     abstract = (entry.findtext("atom:summary", default="", namespaces=ns) or "").strip()
     published = entry.findtext("atom:published", default="", namespaces=ns)
     year = int(published[:4]) if published and published[:4].isdigit() else 0
+    month = int(published[5:7]) if published and len(published) >= 7 and published[5:7].isdigit() else 0
 
     authors = []
     for author_node in entry.findall("atom:author", ns):
@@ -110,6 +111,7 @@ def _fetch_arxiv_metadata(arxiv_id: str) -> Optional[dict]:
         "title": title,
         "abstract": abstract,
         "year": year,
+        "month": month,
         "authors": authors,
         "url": link,
     }

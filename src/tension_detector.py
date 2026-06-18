@@ -138,12 +138,14 @@ def detect_all_tensions(
     if not model:
         return None
 
-    # Format claims
-    claims_sorted = sorted(claims, key=lambda c: c.year)
+    # Format claims (chronological with month precision)
+    claims_sorted = sorted(claims, key=lambda c: (c.year, getattr(c, 'month', 0)))
     claims_lines = []
     for c in claims_sorted:
+        m = getattr(c, 'month', 0)
+        date_str = f"{c.year}-{m:02d}" if m > 0 else str(c.year)
         claims_lines.append(
-            f"[{c.year}] {c.paper_title}\n"
+            f"[{date_str}] {c.paper_title}\n"
             f"  Claim: {c.statement}\n"
             f"  Problem: {c.problem_addressed}"
         )
@@ -277,7 +279,7 @@ INSTRUCTIONS:
      This is a STRUCTURAL ANCHOR: it defines the phase independent of any particular \
      paper or tension. A reader should understand what this phase was about from \
      just this question. Be precise and scoped.
-   - time_range: e.g. "2020-2022"
+   - time_range: e.g. "2020-08—2022-11" (use month precision from paper dates)
    - core_contradiction: 1 SENTENCE — the CENTRAL contradiction (keep under 100 chars)
    - key_papers: 3-5 papers most central to this phase (from paper list)
    - core_debate: 1 SENTENCE — What competing answers existed (keep under 80 chars)
@@ -297,6 +299,17 @@ INSTRUCTIONS:
    - If a phase only has 1 natural paper, merge it with the adjacent phase. \
      A phase with 2 papers is acceptable if they form a coherent narrative arc.
 
+5. CRITICAL — Paper version ordering (same lineage):
+   - Papers from the same research lineage (identified by shared base name, \
+     e.g. "Sparse4D" and "Sparse4D v2", "BEVFormer" and "BEVFormer v2")
+   - MUST appear in version order across phases. The base/original paper
+   - (without version suffix) CANNOT be in a LATER phase than its v2/v3 successor.
+   - If the base paper and v2 are thematically different, put BOTH in the
+   - EARLIER phase — it is better to have a paper slightly out of its thematic
+   - home than to have v2 appear before v1. Same-lineage papers should ideally
+   - be in the SAME phase. Only split them if there is a clear thematic break
+   - AND v1 is first.
+
 Return JSON:
 ```json
 {{
@@ -304,7 +317,7 @@ Return JSON:
     {{
       "name": "How to Build a 3D View from 2D Images?",
       "dominant_question": "How can 2D image features be reliably projected into 3D space for autonomous driving perception without relying on expensive depth labels?",
-      "time_range": "2020-2022",
+      "time_range": "2020-08—2022-11",
       "core_contradiction": "Camera-to-BEV needs depth but dense projection is expensive and depth labels constrain backbones",
       "key_papers": ["LSS: Lift-Splat-Shoot", "BEVDet: High-Performance Multi-Camera 3D Object Detection", "BEVDepth: Acquisition of Reliable Depth for Multi-view 3D Object Detection"],
       "core_debate": "Is explicit depth supervision needed for accurate BEV perception?",
@@ -362,13 +375,16 @@ def merge_tensions_into_phases(
         )
     tensions_text = "\n\n".join(tensions_lines)
 
-    # Format papers (chronological, for time reference)
-    claims_by_paper = {}
+    # Format papers (chronological, with month precision for time reference)
+    claims_by_paper: dict[str, tuple[int, int]] = {}
     for c in claims:
         if c.paper_title not in claims_by_paper:
-            claims_by_paper[c.paper_title] = c.year
+            claims_by_paper[c.paper_title] = (c.year, getattr(c, 'month', 0))
     papers_sorted = sorted(claims_by_paper.items(), key=lambda x: x[1])
-    papers_lines = [f"[{y}] {t}" for t, y in papers_sorted]
+    papers_lines = []
+    for t, (y, m) in papers_sorted:
+        date_str = f"{y}-{m:02d}" if m > 0 else str(y)
+        papers_lines.append(f"[{date_str}] {t}")
     papers_text = "\n".join(papers_lines)
 
     prompt = _PHASE_MERGE_PROMPT.format(
@@ -457,21 +473,18 @@ def phases_to_markdown(phases: list[Phase]) -> str:
         return ""
 
     lines = [
-        "## 技术发展阶段",
+        "### 技术发展阶段",
         "",
-        "| 阶段 | 时间 | 核心矛盾 | 核心辩论 | 关键论文 | 遗留问题 |",
-        "|------|------|----------|----------|----------|----------|",
+        "| 阶段 | 时间 | 关键论文 | 遗留问题 |",
+        "|------|------|----------|----------|",
     ]
     for p in phases:
-        contradiction = p.core_contradiction if len(p.core_contradiction) <= 120 else p.core_contradiction[:117] + "..."
-        debate = p.core_debate if len(p.core_debate) <= 80 else p.core_debate[:77] + "..."
         papers = ', '.join(p.key_papers[:3])
         if len(p.key_papers) > 3:
             papers += f" (+{len(p.key_papers) - 3})"
-        unresolved = p.unresolved_problem if len(p.unresolved_problem) <= 80 else p.unresolved_problem[:77] + "..."
+        unresolved = p.unresolved_problem
         lines.append(
-            f"| **{p.name}** | {p.time_range} | {contradiction} | "
-            f"{debate} | {papers} | "
+            f"| **{p.name}** | {p.time_range} | {papers} | "
             f"{unresolved} |"
         )
     return "\n".join(lines) + "\n"

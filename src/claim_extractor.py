@@ -335,6 +335,7 @@ def _parse_response(raw: str, paper: Paper) -> list[Claim]:
             paper_id=paper.id,
             paper_title=paper.title,
             year=paper.year,
+            month=getattr(paper, 'month', 0),
             statement=statement,
             evidence=item.get("evidence", "").strip(),
             problem_addressed=item.get("problem_addressed", "").strip(),

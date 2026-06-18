@@ -142,12 +142,16 @@ def classify_claim_relation(
     if not model:
         return None
 
+    def _fmt_date(c: Claim) -> str:
+        m = getattr(c, 'month', 0)
+        return f"{c.year}-{m:02d}" if m > 0 else str(c.year)
+
     prompt = _CLAIM_RELATION_PROMPT.format(
-        year_a=claim_a.year,
+        year_a=_fmt_date(claim_a),
         paper_a=claim_a.paper_title,
         problem_a=claim_a.problem_addressed,
         claim_a=claim_a.statement,
-        year_b=claim_b.year,
+        year_b=_fmt_date(claim_b),
         paper_b=claim_b.paper_title,
         problem_b=claim_b.problem_addressed,
         claim_b=claim_b.statement,

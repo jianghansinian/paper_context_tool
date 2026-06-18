@@ -227,9 +227,11 @@ def detect_research_questions(
 
     claims_parts = []
     for paper_title, paper_claims in sorted(claims_by_paper.items(),
-                                             key=lambda x: x[1][0].year):
-        year = paper_claims[0].year
-        claims_parts.append(f"\n[{year}] {paper_title}")
+                                             key=lambda x: (x[1][0].year, getattr(x[1][0], 'month', 0))):
+        c0 = paper_claims[0]
+        m = getattr(c0, 'month', 0)
+        date_str = f"{c0.year}-{m:02d}" if m > 0 else str(c0.year)
+        claims_parts.append(f"\n[{date_str}] {paper_title}")
         for j, c in enumerate(paper_claims, 1):
             level_tag = f"<{c.claim_level}>" if c.claim_level else ""
             claims_parts.append(f"  Claim {j} {level_tag}: {c.statement}")
