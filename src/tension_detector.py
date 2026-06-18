@@ -273,6 +273,10 @@ INSTRUCTIONS:
 2. For each Phase, identify:
    - name: Question-driven title (e.g. "How to Build a 3D View from 2D Images?" \
      not "Dense BEV Era"). Use the form "{{How/Can/Should/What}} ... ?" when possible.
+   - dominant_question: 1 SENTENCE — the EXACT question that drove this phase. \
+     This is a STRUCTURAL ANCHOR: it defines the phase independent of any particular \
+     paper or tension. A reader should understand what this phase was about from \
+     just this question. Be precise and scoped.
    - time_range: e.g. "2020-2022"
    - core_contradiction: 1 SENTENCE — the CENTRAL contradiction (keep under 100 chars)
    - key_papers: 3-5 papers most central to this phase (from paper list)
@@ -299,6 +303,7 @@ Return JSON:
   "phases": [
     {{
       "name": "How to Build a 3D View from 2D Images?",
+      "dominant_question": "How can 2D image features be reliably projected into 3D space for autonomous driving perception without relying on expensive depth labels?",
       "time_range": "2020-2022",
       "core_contradiction": "Camera-to-BEV needs depth but dense projection is expensive and depth labels constrain backbones",
       "key_papers": ["LSS: Lift-Splat-Shoot", "BEVDet: High-Performance Multi-Camera 3D Object Detection", "BEVDepth: Acquisition of Reliable Depth for Multi-view 3D Object Detection"],
@@ -415,6 +420,7 @@ def merge_tensions_into_phases(
                 phases.append(Phase(
                     name=p.get("name", ""),
                     time_range=p.get("time_range", ""),
+                    dominant_question=p.get("dominant_question", ""),
                     core_contradiction=p.get("core_contradiction", ""),
                     key_papers=p.get("key_papers", []),
                     core_debate=p.get("core_debate", ""),

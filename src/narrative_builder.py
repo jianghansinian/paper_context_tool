@@ -72,6 +72,8 @@ TIME DISCIPLINE: ONLY papers from {time_range} or earlier exist in this phase.
 
 PREVIOUS UNSOLVED PROBLEM: "{prev_unresolved}"
 
+DOMINANT QUESTION (this is what the phase is fundamentally about): "{dominant_question}"
+
 CORE CONTRADICTION: {core_contradiction}
 CORE DEBATE: {core_debate}
 
@@ -714,6 +716,7 @@ def _generate_phase_narrative(
         phase_name=phase.name,
         time_range=phase.time_range,
         prev_unresolved=prev_unresolved,
+        dominant_question=phase.dominant_question or "",
         setup_instruction=(
             "1-2 sentences. Briefly reference the previous phase's unsolved problem "
             "(see PREVIOUS UNSOLVED PROBLEM above)."

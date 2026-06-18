@@ -35,7 +35,7 @@ from tension_detector import (
 from paradigm_shift_detector import detect_paradigm_shifts, shifts_to_markdown
 from research_question_detector import detect_research_questions
 from llm_analyzer import build_analyzer_client
-from paper_resolver import _fetch_arxiv_metadata, _extract_arxiv_id
+from paper_resolver import _fetch_arxiv_metadata, _fetch_ss_metadata_by_arxiv, _extract_arxiv_id
 
 # ── 12 MVP papers ─────────────────────────────────────────────────────
 MVP_PAPERS = [
@@ -72,7 +72,7 @@ def main():
     for i, mp in enumerate(MVP_PAPERS):
         arxiv_id = mp["arxiv_id"]
         arxiv_meta = _fetch_arxiv_metadata(arxiv_id)
-        if arxiv_meta:
+        if arxiv_meta and arxiv_meta.get("abstract"):
             paper = Paper(
                 id=f"arxiv:{arxiv_id}",
                 arxiv_id=arxiv_id,
@@ -84,14 +84,33 @@ def main():
                 source="arxiv",
             )
         else:
-            # Fallback: metadata from our table
-            paper = Paper(
-                id=f"arxiv:{arxiv_id}",
-                arxiv_id=arxiv_id,
-                title=mp["title"],
-                abstract="",
-                source="arxiv",
-            )
+            # Try Semantic Scholar as fallback
+            if arxiv_meta:
+                paper = Paper(
+                    id=f"arxiv:{arxiv_id}",
+                    arxiv_id=arxiv_id,
+                    title=arxiv_meta.get("title", mp["title"]),
+                    authors=arxiv_meta.get("authors", []),
+                    year=arxiv_meta.get("year", 0),
+                    abstract="",
+                    url=arxiv_meta.get("url", f"https://arxiv.org/abs/{arxiv_id}"),
+                    source="arxiv",
+                )
+            else:
+                paper = Paper(
+                    id=f"arxiv:{arxiv_id}",
+                    arxiv_id=arxiv_id,
+                    title=mp["title"],
+                    abstract="",
+                    source="arxiv",
+                )
+            ss_meta = _fetch_ss_metadata_by_arxiv(arxiv_id)
+            if ss_meta and ss_meta.get("abstract"):
+                paper.abstract = ss_meta["abstract"]
+                if not paper.year:
+                    paper.year = ss_meta.get("year", 0)
+                if not paper.authors:
+                    paper.authors = ss_meta.get("authors", [])
         papers.append(paper)
         status = "OK" if paper.abstract else "NO ABSTRACT"
         print(f"  [{i + 1}/{len(MVP_PAPERS)}] {paper.title[:50]} — {status}")
@@ -318,6 +337,8 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None,
         # Phase metadata (compact blockquote)
         if hasattr(section, 'phase') and section.phase:
             p = section.phase
+            if p.dominant_question:
+                lines.append(f"> **核心问题**: {p.dominant_question}")
             lines.append(f"> **核心矛盾**: {p.core_contradiction}")
             lines.append(f"> **核心辩论**: {p.core_debate}")
             if i > 1 and hasattr(narrative.sections[i - 2], 'phase') and narrative.sections[i - 2].phase:

@@ -389,6 +389,7 @@ class Phase:
     key_papers: list[str]            # 3-6 key paper titles
     core_debate: str                 # What the field was debating in this phase
     unresolved_problem: str          # → becomes next phase's motivation
+    dominant_question: str = ""      # Core question driving this phase (structural anchor, stable across runs)
     tensions: list[Tension] = field(default_factory=list)  # Tensions clustered into this phase
 
     def to_dict(self) -> dict:
@@ -405,6 +406,7 @@ class Phase:
             key_papers=d.get("key_papers", []),
             core_debate=d.get("core_debate", ""),
             unresolved_problem=d.get("unresolved_problem", ""),
+            dominant_question=d.get("dominant_question", ""),
             tensions=[Tension.from_dict(t) for t in d.get("tensions", [])],
         )
 

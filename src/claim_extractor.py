@@ -71,8 +71,11 @@ A bad Claim (do NOT extract):
 3. Is too vague to be falsifiable ("our method is effective")
 4. Reports a result without the claim BEHIND the result
 
-For each paper, extract 4-6 claims. Each claim must pass the falsifiability \
-test: "Could someone design an experiment that would prove this wrong?"
+For each paper, extract 1-3 CORE claims only. Focus on what REALLY matters — \
+the 1-3 ideas that shaped the field's thinking. If a paper has only one truly \
+important claim, return just one. Quality over quantity. Each claim must pass \
+the falsifiability test: "Could someone design an experiment that would prove \
+this wrong?"
 
 Return ONLY a JSON array. No other text."""
 
@@ -250,7 +253,9 @@ AUTHORS: {', '.join(paper.authors[:5])}{'...' if len(paper.authors) > 5 else ''}
 
 ---
 
-Extract 4-6 falsifiable claims from this paper. Each claim must:
+Extract 1-3 CORE claims from this paper. Focus only on ideas that changed or \
+significantly influenced how the field thinks. Skip engineering details, \
+training recipes, and incremental improvements. Each claim must:
 1. Be a judgment about what is true/better, not a method description
 2. Be falsifiable
 3. Include specific evidence
