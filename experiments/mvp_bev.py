@@ -24,12 +24,16 @@ from pathlib import Path
 # Ensure src/ is on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from paper import Paper, Claim
+from paper import Paper, Claim, Phase
 from claim_extractor import extract_claims
-from narrative_builder import build_narrative_from_claims, propose_structure
-from claim_relation_builder import build_paper_chain_relations, classify_paradigm_relation
-from tension_detector import detect_tensions, tensions_to_markdown
+from narrative_builder import build_narrative
+from claim_relation_builder import build_paper_chain_relations
+from tension_detector import (
+    detect_all_tensions, merge_tensions_into_phases,
+    tensions_to_markdown, phases_to_markdown,
+)
 from paradigm_shift_detector import detect_paradigm_shifts, shifts_to_markdown
+from research_question_detector import detect_research_questions
 from llm_analyzer import build_analyzer_client
 from paper_resolver import _fetch_arxiv_metadata, _extract_arxiv_id
 
@@ -92,8 +96,8 @@ def main():
         status = "OK" if paper.abstract else "NO ABSTRACT"
         print(f"  [{i + 1}/{len(MVP_PAPERS)}] {paper.title[:50]} — {status}")
 
-    # ── Phase 2: Extract claims (flat pool, no manual branches) ──
-    print(f"\n[3/5] Extracting claims from {len(papers)} papers...")
+    # ── Phase 2: Extract claims ──
+    print(f"\n[3/7] Extracting claims from {len(papers)} papers...")
     all_claims: list[Claim] = []
     for i, paper in enumerate(papers):
         claims = extract_claims(paper, client=client)
@@ -103,142 +107,119 @@ def main():
     total_claims = len(all_claims)
     print(f"\n  Total: {total_claims} claims")
 
-    # ── Phase 3: Propose phase structure (LLM discovers paradigm shifts) ──
-    print(f"\n[4/5] Proposing phase structure from claims...")
-    phases = propose_structure(all_claims, field_name="BEV Perception", client=client)
+    # ── Phase 3: Build claim relations (V6: still needed for edges) ──
+    print(f"\n[4/7] Building claim relations...")
 
-    if not phases:
-        print("  WARNING: Structure proposal failed, using single phase fallback")
-        phases = [{
-            "name": "BEV Perception",
-            "time_range": "2020-2024",
-            "problem_statement": "How to build unified BEV perception from multi-camera images?",
-            "core_paradigm": "Camera-only BEV perception",
-            "paper_arxiv_ids": [mp["arxiv_id"] for mp in MVP_PAPERS],
-            "key_evolution": "Evolution of BEV perception methods from 2020 to 2024",
-        }]
+    # Sort claims by year, then build relations between consecutive papers
+    claims_sorted = sorted(all_claims, key=lambda c: c.year)
 
-    print(f"\n  LLM proposed {len(phases)} phase(s):")
-    for p in phases:
-        papers_in_phase = [mp["title"] for mp in MVP_PAPERS
-                          if mp["arxiv_id"] in p.get("paper_arxiv_ids", [])]
-        print(f"    {p['name']} ({p.get('time_range', '?')})")
-        print(f"      Paradigm: {p.get('core_paradigm', '?')}")
-        print(f"      Papers ({len(papers_in_phase)}): {', '.join(papers_in_phase)}")
-        print()
+    # Group claims by paper for chain building
+    claims_by_paper: dict[str, list[Claim]] = {}
+    for c in claims_sorted:
+        claims_by_paper.setdefault(c.paper_id, []).append(c)
 
-    # Group claims into phases based on LLM proposal
-    claims_by_phase: dict[str, list[Claim]] = {}
-    problem_statements: dict[str, str] = {}
-    for phase in phases:
-        name = phase["name"]
-        arxiv_ids = phase.get("paper_arxiv_ids", [])
-        phase_claims = [c for c in all_claims
-                        if any(aid in c.paper_id for aid in arxiv_ids)]
-        claims_by_phase[name] = phase_claims
-        problem_statements[name] = phase.get("problem_statement", "")
-        problem_statements[f"{name}__time_range"] = phase.get("time_range", "")
-        problem_statements[f"{name}__core_paradigm"] = phase.get("core_paradigm", "")
+    all_relations = build_paper_chain_relations(claims_by_paper, client=client)
 
-    # ── Phase 3.5: Build claim relations within and across phases ──
-    print(f"\n[4.5] Building claim relations...")
-    all_phase_relations: dict[str, list[dict]] = {}
+    attack_count = sum(1 for r in all_relations
+                       if (hasattr(r, 'relation') and r.relation in ("attack", "replace"))
+                       or (isinstance(r, dict) and r.get("relation") in ("attack", "replace")))
+    print(f"  {len(all_relations)} relations ({attack_count} attack/replace)")
 
-    # Phase order list for cross-phase paradigm comparison
-    phase_names = list(claims_by_phase.keys())
-    prev_phase_paradigm: str = ""
-    prev_phase_name: str = ""
-
-    for phase_name in phase_names:
-        phase_claims = claims_by_phase[phase_name]
-
-        # Group claims by paper within this phase
-        claims_by_paper: dict[str, list[Claim]] = {}
-        for c in phase_claims:
-            claims_by_paper.setdefault(c.paper_id, []).append(c)
-
-        # Sort papers by year
-        sorted_papers = sorted(claims_by_paper.items(), key=lambda x: x[1][0].year)
-
-        # Within-phase relations: consecutive paper pairs
-        relations = build_paper_chain_relations(claims_by_paper, client=client)
-
-        # Cross-phase paradigm relation: compare core paradigms
-        if prev_phase_paradigm and phase_name in problem_statements:
-            paradigm_result = classify_paradigm_relation(
-                earlier_paradigm=prev_phase_paradigm,
-                later_paradigm=problem_statements.get(f"{phase_name}__core_paradigm", ""),
-                earlier_phase_name=prev_phase_name,
-                later_phase_name=phase_name,
-                client=client,
-            )
-            if paradigm_result:
-                relations.insert(0, {
-                    "source_paper": f"[Paradigm] {prev_phase_name}",
-                    "target_paper": f"[Paradigm] {phase_name}",
-                    "source_claim": prev_phase_paradigm,
-                    "target_claim": problem_statements.get(f"{phase_name}__core_paradigm", ""),
-                    "source_year": 0,
-                    "target_year": 0,
-                    "relation": paradigm_result["relation"],
-                    "explanation": f"[PARADIGM SHIFT] {paradigm_result['explanation']}",
-                })
-
-        all_phase_relations[phase_name] = relations
-
-        # Remember this phase's paradigm for next cross-phase comparison
-        prev_phase_paradigm = problem_statements.get(f"{phase_name}__core_paradigm", "")
-        prev_phase_name = phase_name
-
-        attack_count = sum(1 for r in relations if r["relation"] in ("attack", "replace"))
-        print(f"  {phase_name}: {len(relations)} relations "
-              f"({attack_count} attack/replace)")
-
-    # ── Phase 3.7: Detect research tensions ──
-    print(f"\n[4.7] Detecting research tensions...")
-    tensions = detect_tensions(
+    # ── Phase 3.5: Detect research questions (V7: RQ->Tension->Direction nested) ──
+    print(f"\n[4.5] Detecting research questions (with nested tensions + direction)...")
+    research_questions = detect_research_questions(
         claims=all_claims,
-        relations=[r for rels in all_phase_relations.values() for r in rels],
-        phases=phases,
         field_name="BEV Perception",
         client=client,
     )
-    if tensions:
-        print(f"  Detected {len(tensions)} tensions:")
-        for t in tensions:
-            print(f"    [{t.get('status', '?')}] {t['tension']}")
-    else:
-        print("  WARNING: Tension detection failed")
+    if research_questions:
+        print(f"  Detected {len(research_questions)} research questions:")
+        for rq in research_questions:
+            t_count = len(rq.tensions) if rq.tensions else 0
+            d_info = ""
+            if rq.direction:
+                d_info = f" | direction: {rq.direction.confidence}"
+            print(f"    [{rq.level.upper()}] {rq.question} — {t_count} tensions{d_info}")
 
-    # ── Phase 3.8: Detect paradigm shifts ──
+        # Collect tensions from all RQs
+        rq_tensions = []
+        for rq in research_questions:
+            if rq.tensions:
+                rq_tensions.extend(rq.tensions)
+        print(f"  Total RQ-nested tensions: {len(rq_tensions)}")
+    else:
+        print("  WARNING: RQ detection failed")
+        rq_tensions = []
+        research_questions = []
+
+    # ── Phase 3.6: Two-stage tension -> phase detection (V8) ──
+    print(f"\n[4.6] Stage 1: Detecting ALL tensions (no limit)...")
+    all_tensions = detect_all_tensions(
+        claims=all_claims,
+        relations=all_relations,
+        field_name="BEV Perception",
+        client=client,
+    )
+    if all_tensions:
+        print(f"  Detected {len(all_tensions)} tensions (Stage 1, fine-grained):")
+        for t in all_tensions:
+            print(f"    [{t.dimension}] {t.tension} — {t.status}")
+    else:
+        print("  WARNING: Stage 1 tension detection failed, using RQ-nested tensions")
+        all_tensions = rq_tensions or []
+
+    print(f"\n[4.7] Stage 2: Merging tensions into phases...")
+    phases = None
+    if all_tensions:
+        phases = merge_tensions_into_phases(
+            tensions=all_tensions,
+            claims=all_claims,
+            field_name="BEV Perception",
+            client=client,
+        )
+    if phases:
+        print(f"  Merged into {len(phases)} phases:")
+        for i, p in enumerate(phases):
+            print(f"    Phase {i + 1}: {p.name} ({p.time_range})")
+            print(f"      Core contradiction: {p.core_contradiction[:100]}...")
+            print(f"      Unresolved: {p.unresolved_problem[:100]}...")
+            print(f"      Papers: {', '.join(p.key_papers[:4])}")
+    else:
+        print("  WARNING: Phase merging failed, narrative will fall back to RQ-based")
+
+    # ── Phase 3.7: Detect paradigm shifts ──
     print(f"\n[4.8] Detecting paradigm shifts...")
-    all_relations_flat = [r for rels in all_phase_relations.values() for r in rels]
     paradigm_shifts = detect_paradigm_shifts(
         claims=all_claims,
-        relations=all_relations_flat,
-        phases=phases,
-        tensions=tensions or [],
+        relations=all_relations,
+        phases=[{"name": "BEV Perception", "time_range": "2020-2024",
+                 "core_paradigm": "Camera-only BEV perception",
+                 "paper_arxiv_ids": [mp["arxiv_id"] for mp in MVP_PAPERS]}],
+        tensions=all_tensions or [],
         field_name="BEV Perception",
         client=client,
     )
     if paradigm_shifts:
         print(f"  Detected {len(paradigm_shifts)} paradigm shifts:")
         for s in paradigm_shifts:
-            print(f"    [{s.get('magnitude', '?').upper()}] {s['shift_name']} "
-                  f"({s.get('level', '?')})")
+            mag = s.magnitude if hasattr(s, 'magnitude') else s.get('magnitude', '?')
+            name = s.shift_name if hasattr(s, 'shift_name') else s['shift_name']
+            lvl = s.level if hasattr(s, 'level') else s.get('level', '?')
+            print(f"    [{mag.upper()}] {name} ({lvl})")
     else:
         print("  WARNING: Paradigm shift detection failed")
 
-    # ── Phase 4: Generate field-centric narrative ──
-    print(f"\n[5/6] Generating field-centric narrative...")
-    narrative = build_narrative_from_claims(
-        claims_by_branch=claims_by_phase,
-        problem_statements=problem_statements,
+    # ── Phase 4: Generate Phase-centric narrative (V8) ──
+    print(f"\n[5/7] Generating phase-centric narrative...")
+    narrative = build_narrative(
+        claims=all_claims,
+        claim_relations=all_relations,
+        research_questions=research_questions,
+        tensions=all_tensions,
+        paradigm_shifts=paradigm_shifts or [],
+        phases=phases,
         field_name="BEV Perception",
         client=client,
-        claim_relations=all_phase_relations,
-        tensions=tensions or [],
-        paradigm_shifts=paradigm_shifts or [],
     )
 
     if not narrative:
@@ -246,7 +227,15 @@ def main():
         sys.exit(1)
 
     # ── Export ──
-    output_dir = Path("output/v4_mvp")
+    # Auto-increment run number so each run gets a unique directory
+    output_root = Path("output")
+    existing = sorted(output_root.glob("v8_mvp_*"))
+    if existing:
+        last_num = int(existing[-1].name.rsplit("_", 1)[-1])
+        run_num = last_num + 1
+    else:
+        run_num = 1
+    output_dir = output_root / f"v8_mvp_{run_num:03d}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save full data
@@ -258,7 +247,7 @@ def main():
 
     # Generate markdown
     md_path = output_dir / "bev_evolution.md"
-    md_text = _render_markdown(narrative, all_claims, tensions, paradigm_shifts)
+    md_text = _render_markdown(narrative, all_claims, all_tensions, paradigm_shifts, phases)
     md_path.write_text(md_text, encoding="utf-8")
     print(f"\nMarkdown report: {md_path}")
     print(f"JSON data: {data_path}")
@@ -268,9 +257,9 @@ def main():
     print("  PREVIEW")
     print("=" * 60)
     print(f"\n{narrative.overview[:500]}...")
-    for b in narrative.branches:
-        print(f"\n--- {b.name} ---")
-        print(b.narrative[:300])
+    for s in narrative.sections:
+        print(f"\n--- {s.title} ---")
+        print(s.narrative[:300])
         print("...")
     print(f"\n{narrative.synthesis[:300]}...")
 
@@ -284,14 +273,11 @@ def _paper_label(title: str) -> str:
     return title[:45] + "..." if len(title) > 45 else title
 
 
-def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None) -> str:
-    """Render narrative to markdown.
+def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None, phases=None) -> str:
+    """Render narrative to markdown — V8: unified Phase chapters.
 
-    Design:
-    - Claims in compact table format (multi-row per paper, no repetition)
-    - Evolution shown as Mermaid graph (primary), text tree as collapsible fallback
-    - Mermaid kept as collapsible alternative
-    - Paradigm shifts grouped by dimension
+    Each Phase chapter contains: narrative + evolution graph + claims table + direction.
+    Paradigm shifts are placed after all phases as a cross-phase summary.
     """
     lines = [
         f"# {narrative.field_name} — 技术发展叙事",
@@ -303,69 +289,81 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
         "---",
     ]
 
-    # ── Pass 1: All phase narratives ──────────────────────────────────
-    for i, branch in enumerate(narrative.branches, 1):
-        header = f"## {i + 1}. {branch.name}"
-        if branch.time_range:
-            header += f" ({branch.time_range})"
-        lines.append(header)
+    # ── Unified Phase chapters ──────────────────────────────────────────
+    for i, section in enumerate(narrative.sections, 1):
+        phase_name = section.title
+        lines.append(f"## {i + 1}. {phase_name}")
         lines.append("")
-        if branch.core_paradigm:
-            lines.append(f"**核心范式**: {branch.core_paradigm}")
-        lines.extend([
-            f"**核心问题**: {branch.problem_statement}",
-            "",
-            "### 技术发展故事",
-            "",
-            branch.narrative,
-            "",
-        ])
 
-    # ── Paradigm shifts (right after narratives, before paper details) ──
-    if paradigm_shifts:
-        lines.extend([
-            "---",
-            "",
-            shifts_to_markdown(paradigm_shifts),
-        ])
+        # Phase metadata (compact)
+        if hasattr(section, 'phase') and section.phase:
+            p = section.phase
+            lines.append(f"> **核心矛盾**: {p.core_contradiction}")
+            lines.append(f"> **核心辩论**: {p.core_debate}")
+            if i > 1 and hasattr(narrative.sections[i - 2], 'phase') and narrative.sections[i - 2].phase:
+                prev_p = narrative.sections[i - 2].phase
+                lines.append(f"> **承接上一阶段**: {prev_p.unresolved_problem}")
+            lines.append("")
 
-    # ── Pass 2: All branch details (graph + path + claims) ────────────
-    for i, branch in enumerate(narrative.branches, 1):
-        lines.extend([
-            f"### {branch.name} — 演化细节",
-            "",
-        ])
+        # ── 1) Narrative ──
+        lines.append(f"### {i}.1 技术叙事")
+        lines.append("")
+        lines.append(section.narrative)
+        lines.append("")
 
-        relations = branch.claim_relations or []
+        # ── 2) Direction (phase-specific) ──
+        if section.direction:
+            d = section.direction
+            conf_labels = {"high": "High", "medium": "Medium", "low": "Low"}
+            conf = conf_labels.get(d.confidence, d.confidence)
+            sup = d.support_papers or []
+            opp = d.opposing_papers or []
+            lines.append(f"### {i}.2 方向判断")
+            lines.append("")
+            lines.append(f"**方向** (置信度: **{conf}**): {d.statement}")
+            lines.append("")
+            if sup:
+                lines.append(f"- **Supporting**: {', '.join(sup[:5])}")
+            if opp:
+                lines.append(f"- **Opposing**: {', '.join(opp[:5])}")
+            if d.evidence_summary:
+                lines.append(f"- **Evidence**: {d.evidence_summary}")
+            lines.append("")
+
+        # ── 3) Evolution graph + Claims ──
+        relations = section.claim_relations or []
+        section_claims = section.claims or []
+        if relations or section_claims:
+            lines.append(f"### {i}.3 论文演化")
+            lines.append("")
+
+        # ── 3a) Mermaid graph ──
         if relations:
             paper_labels: dict[str, str] = {}
             for r in relations:
-                for paper in [r["source_paper"], r["target_paper"]]:
+                src = r.source_paper if hasattr(r, 'source_paper') else r["source_paper"]
+                tgt = r.target_paper if hasattr(r, 'target_paper') else r["target_paper"]
+                for paper in [src, tgt]:
                     if paper not in paper_labels:
                         paper_labels[paper] = _paper_label(paper)
 
-            # Build edge map for annotated chain
-            edges: dict[str, tuple[str, str, str]] = {}
-            for r in relations:
-                edges[r["source_paper"]] = (r["target_paper"], r["relation"], r["explanation"])
-
-            # Collect paper order and years
             papers_in_order: list[str] = []
             seen = set()
             for r in relations:
-                for p in [r["source_paper"], r["target_paper"]]:
+                src = r.source_paper if hasattr(r, 'source_paper') else r["source_paper"]
+                tgt = r.target_paper if hasattr(r, 'target_paper') else r["target_paper"]
+                for p in [src, tgt]:
                     if p not in seen:
                         papers_in_order.append(p)
                         seen.add(p)
 
             paper_years: dict[str, str] = {}
-            for c in branch.claims:
+            for c in section_claims:
                 if c.paper_title not in paper_years:
                     paper_years[c.paper_title] = str(c.year)
 
-            # ── Mermaid graph ──
             lines.extend([
-                "### 思想演化图",
+                "#### 思想演化图",
                 "",
                 "```mermaid",
                 "flowchart LR",
@@ -373,7 +371,9 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
             node_ids = {}
             node_idx = 0
             for r in relations:
-                for paper in [r["source_paper"], r["target_paper"]]:
+                src = r.source_paper if hasattr(r, 'source_paper') else r["source_paper"]
+                tgt = r.target_paper if hasattr(r, 'target_paper') else r["target_paper"]
+                for paper in [src, tgt]:
                     if paper not in node_ids:
                         nid = f"P{node_idx}"
                         node_ids[paper] = nid
@@ -382,8 +382,11 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
                         lines.append(f'    {nid}["{label}"]')
 
             for r in relations:
-                src_id = node_ids.get(r["source_paper"], "")
-                tgt_id = node_ids.get(r["target_paper"], "")
+                src = r.source_paper if hasattr(r, 'source_paper') else r["source_paper"]
+                tgt = r.target_paper if hasattr(r, 'target_paper') else r["target_paper"]
+                rel = r.relation if hasattr(r, 'relation') else r["relation"]
+                src_id = node_ids.get(src, "")
+                tgt_id = node_ids.get(tgt, "")
                 if src_id and tgt_id:
                     rel_map = {
                         "improve": " -->|IMPROVE| ",
@@ -393,7 +396,7 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
                         "attack": " ==>|ATTACK| ",
                         "parallel": " -.->|PARALLEL| ",
                     }
-                    edge = rel_map.get(r["relation"], f" -->|{r['relation'].upper()}| ")
+                    edge = rel_map.get(rel, f" -->|{rel.upper()}| ")
                     lines.append(f"    {src_id}{edge}{tgt_id}")
 
             lines.extend([
@@ -413,10 +416,7 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
                 "parallel": "∥ PARALLEL",
             }
 
-            lines.extend([
-                "### 演化路径",
-                "",
-            ])
+            lines.extend(["#### 演化路径", ""])
 
             for paper in papers_in_order:
                 label = paper_labels.get(paper, paper[:50])
@@ -425,77 +425,114 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None)
                 lines.append(f"**{label}**{year_str}")
                 lines.append("")
 
-                if paper in edges:
-                    tgt, rel, expl = edges[paper]
+                # Find outgoing edge for this paper
+                found_edge = None
+                for r in relations:
+                    src = r.source_paper if hasattr(r, 'source_paper') else r["source_paper"]
+                    if src == paper:
+                        tgt = r.target_paper if hasattr(r, 'target_paper') else r["target_paper"]
+                        rel = r.relation if hasattr(r, 'relation') else r["relation"]
+                        expl = r.explanation if hasattr(r, 'explanation') else r["explanation"]
+                        found_edge = ("out", tgt, rel, expl)
+                        break
+
+                if found_edge:
+                    _, tgt, rel, expl = found_edge
                     icon = rel_icons.get(rel, rel.upper())
                     tgt_label = paper_labels.get(tgt, tgt[:50])
-                    if rel == "parallel":
-                        lines.append(f"> ∥ **PARALLEL** → {tgt_label}")
-                        lines.append(f"> 不同研究线 — {expl}")
-                    else:
-                        lines.append(f"> {icon} → **{tgt_label}**")
-                        lines.append(f"> {expl}")
-                    lines.append("")
+                    lines.append(f"> {icon} → **{tgt_label}**")
+                    lines.append(f"> {expl}")
+                else:
+                    # No outgoing edge — show incoming (what led to this paper)
+                    for r in relations:
+                        tgt = r.target_paper if hasattr(r, 'target_paper') else r["target_paper"]
+                        if tgt == paper:
+                            src = r.source_paper if hasattr(r, 'source_paper') else r["source_paper"]
+                            rel = r.relation if hasattr(r, 'relation') else r["relation"]
+                            expl = r.explanation if hasattr(r, 'explanation') else r["explanation"]
+                            src_label = paper_labels.get(src, src[:50])
+                            icon = rel_icons.get(rel, rel.upper())
+                            lines.append(f"> ← {icon} **{src_label}**")
+                            lines.append(f"> {expl}")
+                            break
+                lines.append("")
 
-        # ── Claims Table ──
-        claims_by_paper: dict[str, list[Claim]] = {}
-        paper_meta: dict[str, tuple[str, int]] = {}
-        for claim in branch.claims:
-            pid = claim.paper_id
-            if pid not in claims_by_paper:
-                claims_by_paper[pid] = []
-                paper_meta[pid] = (claim.paper_title, claim.year)
-            claims_by_paper[pid].append(claim)
+        # ── 3b) Claims table ──
+        if section_claims:
+            claims_by_paper: dict[str, list[Claim]] = {}
+            paper_meta: dict[str, tuple[str, int]] = {}
+            for claim in section_claims:
+                pid = claim.paper_id
+                if pid not in claims_by_paper:
+                    claims_by_paper[pid] = []
+                    paper_meta[pid] = (claim.paper_title, claim.year)
+                claims_by_paper[pid].append(claim)
 
-        sorted_pids = sorted(claims_by_paper.keys(),
-                            key=lambda pid: paper_meta[pid][1])
+            sorted_pids = sorted(claims_by_paper.keys(),
+                                key=lambda pid: paper_meta[pid][1])
 
-        lines.extend([
-            "### 关键论文与核心主张",
-            "",
-            "| 论文 | 年份 | 主张 | 证据 |",
-            "|------|------|------|------|",
-        ])
+            lines.extend([
+                "#### 关键论文与核心主张",
+                "",
+                "| 论文 | 年份 | 主张 | 证据 |",
+                "|------|------|------|------|",
+            ])
 
-        for pid in sorted_pids:
-            title, year = paper_meta[pid]
-            p_claims = claims_by_paper[pid]
-            short_title = _paper_label(title)
+            for pid in sorted_pids:
+                title, year = paper_meta[pid]
+                p_claims = claims_by_paper[pid]
+                short_title = _paper_label(title)
 
-            for j, c in enumerate(p_claims):
-                paper_cell = f"**{short_title}**" if j == 0 else ""
-                year_cell = str(year) if j == 0 else ""
-                claim_text = f"{j + 1}. {c.statement}"
-                evidence = c.evidence
-                lines.append(
-                    f"| {paper_cell} | {year_cell} | {claim_text} | {evidence} |"
-                )
+                for j, c in enumerate(p_claims):
+                    paper_cell = f"**{short_title}**" if j == 0 else ""
+                    year_cell = str(year) if j == 0 else ""
+                    claim_text = f"{j + 1}. {c.statement}"
+                    evidence = c.evidence
+                    lines.append(
+                        f"| {paper_cell} | {year_cell} | {claim_text} | {evidence} |"
+                    )
 
+            lines.append("")
+
+        # ── Causal chain hook ──
+        if hasattr(section, 'phase') and section.phase and i < len(narrative.sections):
+            lines.append(f"> **→ 遗留问题**: {section.phase.unresolved_problem}")
+            lines.append("")
+
+        lines.append("---")
         lines.append("")
 
-    # ── Research tensions ──
-    if tensions:
+    # ── Paradigm shifts (cross-phase summary) ──
+    if paradigm_shifts:
         lines.extend([
+            "## 核心范式转移",
+            "",
+            shifts_to_markdown(paradigm_shifts),
+            "",
             "---",
             "",
+        ])
+
+    # ── Research tensions (compact summary table) ──
+    if tensions:
+        lines.extend([
             "## 核心研究张力",
             "",
-            "> 技术发展史的真正主角不是论文，而是矛盾。以下是驱动该领域演化的核心张力。",
-            "",
             tensions_to_markdown(tensions),
+            "",
+            "---",
+            "",
         ])
 
     # ── Synthesis ──
     lines.extend([
-        "---",
-        "",
         "## 领域趋势与展望",
         "",
         narrative.synthesis,
         "",
         "---",
         "",
-        f"*Generated by Research Narrative Engine V4 (MVP)*",
+        f"*Generated by Research Narrative Engine V8 (MVP)*",
     ])
 
     return "\n".join(lines)

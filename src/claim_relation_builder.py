@@ -6,7 +6,11 @@ Core V4 module that identifies how claims relate to each other:
   IMPROVE  — B fixes a specific limitation of A
   SUPPORT  — B provides independent evidence for A
   EXTEND   — B applies A to a new domain
-  INDEPENDENT — unrelated claims
+  PARALLEL — B addresses a fundamentally different problem from A (independent)
+
+Single-call design: relation classifier directly judges relationship type.
+No separate lineage gatekeeper — "parallel" (independent) is just another
+relation type the LLM can choose when papers address different problems.
 
 These relations turn a flat claim list into a Claim Evolution Chain,
 enabling narrative generation to show "Claim Wars" rather than just
@@ -22,131 +26,7 @@ from openai import OpenAI
 
 import config
 from llm_analyzer import _resolve_model
-from paper import Claim
-
-# ── Research lineage classifier ───────────────────────────────────────
-# Added P0 fix: before classifying HOW two claims relate, first ask IF they
-# belong to the same research lineage. This prevents false causal chains
-# between parallel developments (e.g., Sparse4D → VAD is NOT causal).
-
-_LINEAGE_SYSTEM = """\
-You are a research historian who determines whether two papers belong to the \
-same research lineage. A "research lineage" means both papers attempt to solve \
-ESSENTIALLY THE SAME PROBLEM at a high level.
-
-For example:
-- "How to build better BEV features from multi-camera images?" → BEVDet, \
-  BEVDepth, BEVFormer, BEVDet4D all share this lineage
-- "How to do perception via sparse queries?" → Sparse4D, SparseBEV share this
-- "How to unify perception, prediction, and planning?" → UniAD, VAD, \
-  SparseDrive share this
-
-SENSITIVITY RULE — When to answer YES, NO, or UNCERTAIN:
-
-Use NO ONLY when papers address FUNDAMENTALLY DIFFERENT DOMAINS where one \
-paper's contribution has no bearing on the other's core problem:
-- BEVFormer (perception representation) vs VAD (planning representation) → NO
-- Sparse4D (sparse detection) vs UniAD (end-to-end planning) → NO
-- BEVDepth (depth estimation) vs SparseDrive (sparse planning) → NO
-
-Use UNCERTAIN when papers share the SAME HIGHER-LEVEL GOAL but address it from \
-different angles. The bar for NO is HIGH — most papers in the same field share \
-some common ground. If the papers could reasonably cite each other for technical \
-reasons (not just as background), lean toward YES or UNCERTAIN:
-- BEVDet4D (temporal cues for BEV detection) vs BEVFormer (spatiotemporal \
-  transformers for BEV) → UNCERTAIN or YES (both address BEV perception, just \
-  different mechanisms: explicit feature fusion vs cross-attention)
-- BEVDepth (depth supervision) vs BEVDet4D (temporal fusion) → UNCERTAIN \
-  (both aim to improve BEV detection, different sub-problems)
-- SparseBEV (sparse detection) vs Sparse4Dv2 (sparse temporal fusion) → YES \
-  (both advance the sparse detection paradigm, different aspects)
-
-Key heuristic: if BOTH papers ultimately aim to improve the SAME downstream \
-task (detection, planning, prediction) using related representational choices, \
-they share a research lineage at the field level. Only answer NO when the \
-papers belong to different TASK domains entirely (detection vs planning).
-
-Return ONLY a JSON object. No other text."""
-
-_LINEAGE_PROMPT = """\
-Do these two papers attempt to solve essentially the same research problem?
-
-PAPER A [{year_a}] {paper_a}:
-Problem addressed: {problem_a}
-Claim: "{claim_a}"
-
-PAPER B [{year_b}] {paper_b}:
-Problem addressed: {problem_b}
-Claim: "{claim_b}"
-
-First, identify the CORE RESEARCH PROBLEM each paper addresses in 1 sentence.
-Then answer: do they share the same research lineage?
-
-Return JSON:
-```json
-{{
-  "problem_a": "string (1 sentence: the core problem Paper A addresses)",
-  "problem_b": "string (1 sentence: the core problem Paper B addresses)",
-  "same_lineage": "YES|NO|UNCERTAIN",
-  "reason": "One sentence explanation."
-}}
-```"""
-
-
-def classify_same_lineage(
-    claim_a: Claim,
-    claim_b: Claim,
-    *,
-    client=None,
-    model=None,
-):
-    """Determine if two papers belong to the same research lineage.
-
-    Returns {"same_lineage": "YES|NO|UNCERTAIN", "reason": str, "problem_a": str, "problem_b": str}
-    or None on failure.
-    """
-    if client is None:
-        from llm_analyzer import build_analyzer_client
-        client = build_analyzer_client()
-    if not client:
-        return None
-
-    model = _resolve_model(model)
-    if not model:
-        return None
-
-    prompt = _LINEAGE_PROMPT.format(
-        year_a=claim_a.year,
-        paper_a=claim_a.paper_title,
-        problem_a=claim_a.problem_addressed,
-        claim_a=claim_a.statement,
-        year_b=claim_b.year,
-        paper_b=claim_b.paper_title,
-        problem_b=claim_b.problem_addressed,
-        claim_b=claim_b.statement,
-    )
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": _LINEAGE_SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.1,
-            max_tokens=512,
-            timeout=config.LLM_ANALYZER_TIMEOUT_SEC,
-        )
-        raw = response.choices[0].message.content or ""
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw)
-        data = json.loads(raw)
-        if isinstance(data, dict) and "same_lineage" in data:
-            return data
-    except Exception as exc:
-        print(f"Lineage classification failed: {exc}")
-
-    return None
+from paper import Claim, ClaimRelation
 
 
 # ── System prompt ─────────────────────────────────────────────────────
@@ -165,13 +45,28 @@ or weakness. B builds on A rather than challenging it.
 - support: B provides independent evidence that strengthens A's claim from \
 a different angle or setting.
 - extend: B applies A's insight to a new domain, task, or problem setting.
-- independent: B addresses a fundamentally different problem; the claims \
-do not interact.
+- parallel: B addresses a fundamentally different problem from A. The claims \
+are independent developments in different research directions.
 
-Key distinction:
+Key distinctions:
 - "attack": "A's assumption X is incorrect" (denies a premise)
 - "replace": "Even if X works, the whole approach is wrong" (denies the paradigm)
 - "improve": "X is right, but has problem Y" (accepts the premise, fixes a flaw)
+- "parallel": "A and B solve different problems; neither builds on nor challenges the other"
+
+CRITICAL: "parallel" means the two papers serve DIFFERENT downstream tasks
+(detection vs planning vs prediction). Different approaches to the SAME downstream
+task are NOT parallel — they compete in the same arena.
+
+EXAMPLES of NON-parallel (all serve DETECTION):
+- Dense BEV detector (A) → Sparse detector (B): "replace" — B says you don't need BEV
+- Single-frame detector (A) → Temporal detector (B): "improve" — B adds a dimension
+- Depth-supervised detector (A) → Attention-based detector (B): "replace" — B says
+  explicit depth labels are unnecessary
+
+EXAMPLES of parallel (serve DIFFERENT tasks):
+- Detection paper (A) → Planning paper (B): "parallel" — different end goals
+- Perception paper (A) → Prediction paper (B): "parallel" — different end goals
 
 Return ONLY a JSON object. No other text."""
 
@@ -180,18 +75,45 @@ _CLAIM_RELATION_PROMPT = """\
 Analyze the relationship between Claim A (earlier) and Claim B (later).
 
 CLAIM A [{year_a}] {paper_a}:
-"{claim_a}"
+Problem: {problem_a}
+Claim: "{claim_a}"
 
 CLAIM B [{year_b}] {paper_b}:
-"{claim_b}"
+Problem: {problem_b}
+Claim: "{claim_b}"
+
+STEP 1 — Identify the DOWNSTREAM TASK each paper ultimately serves:
+- What is the end goal? (3D object detection? motion prediction? planning? map segmentation?)
+- If both papers serve the SAME downstream task, they are in the SAME arena — even if \
+  their methods are radically different. Dense BEV detection and sparse detection both \
+  serve 3D detection → same arena. Modular planning and end-to-end planning both serve \
+  planning → same arena.
+
+STEP 2 — Classify the relationship:
+- "parallel": papers serve DIFFERENT downstream tasks (e.g., detection vs planning). \
+  Neither paper's contribution affects the other's core problem.
+- "replace": B serves the SAME downstream task as A, but argues that A's entire \
+  approach (not just a detail) is unnecessary. B says "you don't need to do it that \
+  way at all." E.g., sparse detection replacing dense BEV detection — same task, \
+  fundamentally different belief about what approach is needed.
+- "attack": B directly contradicts a specific assumption A made. B says "A's premise \
+  X is wrong." More targeted than replace.
+- "improve": B serves the same task, accepts A's overall approach, but fixes a \
+  specific limitation.
+- "extend": B applies A's approach to a NEW task or domain.
+- "support": B provides independent evidence that strengthens A's claim.
+
+CRITICAL: If both papers ultimately serve the SAME downstream task but with \
+fundamentally different philosophies (e.g., dense vs sparse, modular vs end-to-end), \
+the relationship is likely "replace" or "attack", NOT "parallel".
 
 How does Claim B relate to Claim A? Choose one: attack, replace, improve, \
-support, extend, independent.
+support, extend, parallel.
 
 Return JSON:
 ```json
 {{
-  "relation": "attack|replace|improve|support|extend|independent",
+  "relation": "attack|replace|improve|support|extend|parallel",
   "explanation": "One sentence explaining WHY this relation exists."
 }}
 ```"""
@@ -205,10 +127,10 @@ def classify_claim_relation(
     *,
     client: Optional[OpenAI] = None,
     model: Optional[str] = None,
-) -> Optional[dict]:
+) -> Optional[ClaimRelation]:
     """Classify the relationship between two claims.
 
-    Returns {"relation": str, "explanation": str} or None on failure.
+    Returns ClaimRelation or None on failure.
     """
     if client is None:
         from llm_analyzer import build_analyzer_client
@@ -223,9 +145,11 @@ def classify_claim_relation(
     prompt = _CLAIM_RELATION_PROMPT.format(
         year_a=claim_a.year,
         paper_a=claim_a.paper_title,
+        problem_a=claim_a.problem_addressed,
         claim_a=claim_a.statement,
         year_b=claim_b.year,
         paper_b=claim_b.paper_title,
+        problem_b=claim_b.problem_addressed,
         claim_b=claim_b.statement,
     )
 
@@ -245,11 +169,51 @@ def classify_claim_relation(
         raw = re.sub(r"\s*```$", "", raw)
         data = json.loads(raw)
         if isinstance(data, dict) and "relation" in data:
-            return data
+            return ClaimRelation(
+                source_paper=claim_a.paper_title,
+                target_paper=claim_b.paper_title,
+                source_claim=claim_a.statement,
+                target_claim=claim_b.statement,
+                relation=data["relation"],
+                explanation=data.get("explanation", ""),
+                source_year=claim_a.year,
+                target_year=claim_b.year,
+            )
     except Exception as exc:
         print(f"Claim relation classification failed: {exc}")
 
     return None
+
+
+def _guess_downstream_task(paper_title: str, claims: list[Claim]) -> str:
+    """Guess paper's downstream task from title and claim problem statements.
+
+    Used to group papers into task cohorts before building relations,
+    preventing false causal chains between different tasks (detection vs planning).
+    """
+    text = paper_title.lower()
+    for c in claims:
+        text += " " + c.problem_addressed.lower()
+
+    # Planning/prediction keywords
+    if any(kw in text for kw in ["planning", "trajectory", "motion prediction",
+                                   "end-to-end autonomous", "self-driving"]):
+        return "planning"
+    # Detection keywords
+    if any(kw in text for kw in ["detection", "3d object", "bevdet",
+                                   "sparsebev", "bevformer", "multi-camera 3d"]):
+        return "detection"
+    # Tracking
+    if any(kw in text for kw in ["tracking", "multi-object track"]):
+        return "tracking"
+    # Prediction
+    if any(kw in text for kw in ["prediction", "trajectory forecast", "motion forecast"]):
+        return "prediction"
+    # Mapping/segmentation
+    if any(kw in text for kw in ["mapping", "segmentation", "hd map", "lane"]):
+        return "mapping"
+
+    return "other"
 
 
 def build_paper_chain_relations(
@@ -257,172 +221,97 @@ def build_paper_chain_relations(
     *,
     client: Optional[OpenAI] = None,
     model: Optional[str] = None,
-) -> list[dict]:
-    """Build claim relations between chronologically consecutive papers.
+) -> list[ClaimRelation]:
+    """Build claim relations grouped by downstream task, then chronological within each task.
 
-    For each pair of consecutive papers (sorted by year of earliest claim),
-    compares the primary claim of the earlier paper with the primary claim
-    of the later paper.
+    V5.2: Papers are first grouped by downstream task (detection/planning/etc.),
+    then ordered chronologically within each task. Consecutive papers within the
+    same task are compared via LLM. Cross-task pairs are marked parallel without
+    an LLM call — this prevents false causal chains like "detection paper → planning
+    paper" being narrated as if one led to the other.
 
-    Args:
-        claims_by_paper: {paper_id: [Claim, ...]} — claims grouped by paper
-
-    Returns:
-        List of relation dicts with keys:
-            source_paper, target_paper, source_claim, target_claim,
-            relation, explanation
+    Returns list of ClaimRelation objects.
     """
-    # Sort papers by year of their first claim
-    sorted_papers = sorted(claims_by_paper.items(), key=lambda x: x[1][0].year)
+    # Group papers by downstream task
+    task_groups: dict[str, list[tuple[str, list[Claim]]]] = {}
+    for pid, claims in claims_by_paper.items():
+        task = _guess_downstream_task(pid, claims)
+        task_groups.setdefault(task, []).append((pid, claims))
 
-    relations = []
-    for i in range(len(sorted_papers) - 1):
-        pid_a, claims_a = sorted_papers[i]
-        pid_b, claims_b = sorted_papers[i + 1]
+    relations: list[ClaimRelation] = []
 
-        # Use the first claim from each paper as the primary claim
-        claim_a = claims_a[0]
-        claim_b = claims_b[0]
+    # Within each task group: sort by year and build chains
+    for task, papers in task_groups.items():
+        papers.sort(key=lambda x: x[1][0].year)
 
-        # P0 fix: check same research lineage BEFORE classifying relation type.
-        # Papers from different lineages (e.g., perception vs planning) should
-        # NOT be narrated as causal chains.
-        lineage = classify_same_lineage(claim_a, claim_b, client=client, model=model)
-        if lineage and lineage.get("same_lineage") == "NO":
-            relations.append({
-                "source_paper": claim_a.paper_title,
-                "target_paper": claim_b.paper_title,
-                "source_claim": claim_a.statement,
-                "target_claim": claim_b.statement,
-                "source_year": claim_a.year,
-                "target_year": claim_b.year,
-                "relation": "parallel",
-                "explanation": f"Different research lineages — {lineage.get('reason', 'not causally related')}",
-            })
-            continue
+        for i in range(len(papers) - 1):
+            pid_a, claims_a = papers[i]
+            pid_b, claims_b = papers[i + 1]
+            claim_a = claims_a[0]
+            claim_b = claims_b[0]
 
-        result = classify_claim_relation(claim_a, claim_b, client=client, model=model)
-        if result:
-            relations.append({
-                "source_paper": claim_a.paper_title,
-                "target_paper": claim_b.paper_title,
-                "source_claim": claim_a.statement,
-                "target_claim": claim_b.statement,
-                "source_year": claim_a.year,
-                "target_year": claim_b.year,
-                "relation": result["relation"],
-                "explanation": result["explanation"],
-            })
-        else:
-            # Fallback: mark as unclassified
-            relations.append({
-                "source_paper": claim_a.paper_title,
-                "target_paper": claim_b.paper_title,
-                "source_claim": claim_a.statement,
-                "target_claim": claim_b.statement,
-                "source_year": claim_a.year,
-                "target_year": claim_b.year,
-                "relation": "unknown",
-                "explanation": "Classification failed",
-            })
+            result = classify_claim_relation(claim_a, claim_b, client=client, model=model)
+            if result:
+                relations.append(result)
+            else:
+                relations.append(ClaimRelation(
+                    source_paper=claim_a.paper_title,
+                    target_paper=claim_b.paper_title,
+                    source_claim=claim_a.statement,
+                    target_claim=claim_b.statement,
+                    source_year=claim_a.year,
+                    target_year=claim_b.year,
+                    relation="unknown",
+                    explanation="Classification failed",
+                ))
+
+    # Cross-task pairs: add parallel edges for consecutive papers across task boundaries
+    # Sort all papers by year for cross-task linking
+    all_sorted = sorted(claims_by_paper.items(), key=lambda x: x[1][0].year)
+    for i in range(len(all_sorted) - 1):
+        pid_a, claims_a = all_sorted[i]
+        pid_b, claims_b = all_sorted[i + 1]
+        task_a = _guess_downstream_task(pid_a, claims_a)
+        task_b = _guess_downstream_task(pid_b, claims_b)
+
+        if task_a != task_b:
+            claim_a = claims_a[0]
+            claim_b = claims_b[0]
+            # Check if this cross-task pair already has a relation
+            already_related = any(
+                (r.source_paper == claim_a.paper_title and r.target_paper == claim_b.paper_title)
+                for r in relations
+            )
+            if not already_related:
+                relations.append(ClaimRelation(
+                    source_paper=claim_a.paper_title,
+                    target_paper=claim_b.paper_title,
+                    source_claim=claim_a.statement,
+                    target_claim=claim_b.statement,
+                    source_year=claim_a.year,
+                    target_year=claim_b.year,
+                    relation="parallel",
+                    explanation=f"Different downstream tasks — {task_a} vs {task_b}",
+                ))
 
     return relations
 
 
-def relations_to_text(relations: list[dict]) -> str:
+def relations_to_text(relations: list[ClaimRelation]) -> str:
     """Format claim relations as readable text for narrative prompt injection."""
     if not relations:
         return ""
 
     lines = ["CLAIM EVOLUTION CHAIN (how each paper's primary claim relates to the prior one):"]
     for r in relations:
-        rel_upper = r["relation"].upper()
+        rel_upper = r.relation.upper()
         label = rel_upper
-        if r["relation"] == "parallel":
-            label = "PARALLEL (different lineage — do NOT narrate as causal)"
+        if r.relation == "parallel":
+            label = "PARALLEL (independent development — do NOT narrate as causal)"
         lines.append(
-            f"  {r['source_paper']} → {r['target_paper']}: {label}"
+            f"  {r.source_paper} → {r.target_paper}: {label}"
         )
-        lines.append(f"    Explanation: {r['explanation']}")
+        lines.append(f"    Explanation: {r.explanation}")
     return "\n".join(lines)
 
 
-def classify_paradigm_relation(
-    earlier_paradigm: str,
-    later_paradigm: str,
-    earlier_phase_name: str,
-    later_phase_name: str,
-    *,
-    client: Optional[OpenAI] = None,
-    model: Optional[str] = None,
-) -> Optional[dict]:
-    """Classify how a later paradigm relates to an earlier one.
-
-    This is different from claim-level relations — it compares the FUNDAMENTAL
-    ASSUMPTIONS of two eras, not individual paper claims. A paradigm relation
-    of "replace" means the later era rendered the earlier era's core assumption
-    obsolete.
-    """
-    if client is None:
-        from llm_analyzer import build_analyzer_client
-        client = build_analyzer_client()
-    if not client:
-        return None
-
-    model = _resolve_model(model)
-    if not model:
-        return None
-
-    prompt = _PARADIGM_RELATION_PROMPT.format(
-        earlier_paradigm=earlier_paradigm,
-        later_paradigm=later_paradigm,
-        earlier_phase=earlier_phase_name,
-        later_phase=later_phase_name,
-    )
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": _CLAIM_RELATION_SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.1,
-            max_tokens=512,
-            timeout=config.LLM_ANALYZER_TIMEOUT_SEC,
-        )
-        raw = response.choices[0].message.content or ""
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw)
-        data = json.loads(raw)
-        if isinstance(data, dict) and "relation" in data:
-            return data
-    except Exception as exc:
-        print(f"Paradigm relation classification failed: {exc}")
-
-    return None
-
-
-_PARADIGM_RELATION_PROMPT = """\
-Compare the CORE PARADIGM of an earlier research era with a later one.
-
-EARLIER ERA ({earlier_phase}):
-Paradigm: "{earlier_paradigm}"
-
-LATER ERA ({later_phase}):
-Paradigm: "{later_paradigm}"
-
-How does the later paradigm relate to the earlier one?
-
-- attack: The later paradigm directly contradicts the earlier one. It says "the earlier belief was wrong."
-- replace: The later paradigm renders the earlier one obsolete. It says "the entire approach is unnecessary."
-- improve: The later paradigm keeps the earlier one's core approach but addresses limitations.
-- extend: The later paradigm applies the earlier one to a new domain.
-
-Return JSON:
-```json
-{{
-  "relation": "attack|replace|improve|extend",
-  "explanation": "One sentence explaining the paradigm relationship."
-}}
-```"""

@@ -225,6 +225,7 @@ class Claim:
     evidence: str            # Supporting evidence (results, ablations, benchmarks)
     problem_addressed: str   # What problem does this claim address?
     claim_type: str          # "improves" | "extends" | "replaces" | "introduces"
+    claim_level: str = "methodological"  # "paradigm" | "methodological" | "engineering"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -239,60 +240,278 @@ class Claim:
             evidence=d.get("evidence", ""),
             problem_addressed=d.get("problem_addressed", ""),
             claim_type=d.get("claim_type", "introduces"),
+            claim_level=d.get("claim_level", "methodological"),
         )
 
 
 @dataclass
-class Branch:
-    """A research branch/phase — coherent problem area with claim evolution chain."""
-    name: str
-    problem_statement: str
-    paper_ids: list[str] = field(default_factory=list)
-    claims: list[Claim] = field(default_factory=list)
-    narrative: str = ""        # Generated evolution story for this branch
-    is_mainstream: bool = False
-    time_range: str = ""       # e.g. "2020-2022"
-    core_paradigm: str = ""    # The shared fundamental assumption of this phase
-    claim_relations: list[dict] = field(default_factory=list)  # Paper-to-paper claim relations
-    paradigm_shifts: list[dict] = field(default_factory=list)  # Paradigm shifts within this phase
-    tensions: list[dict] = field(default_factory=list)  # Research tensions relevant to this phase
+class ClaimRelation:
+    """A directed relationship between two Claims — the edge in the evolution graph.
 
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "problem_statement": self.problem_statement,
-            "paper_ids": self.paper_ids,
-            "claims": [c.to_dict() for c in self.claims],
-            "narrative": self.narrative,
-            "is_mainstream": self.is_mainstream,
-            "time_range": self.time_range,
-            "core_paradigm": self.core_paradigm,
-            "claim_relations": self.claim_relations,
-            "paradigm_shifts": self.paradigm_shifts,
-            "tensions": self.tensions,
-        }
-
-
-@dataclass
-class EvolutionEdge:
-    """A directed edge in the evolution DAG — relationship between two claims."""
-    source_paper_id: str
-    target_paper_id: str
-    relation: str           # "improves" | "extends" | "replaces" | "combines"
-    description: str        # Natural language explanation
+    Built by a two-step classifier: (1) same_lineage check, (2) relation type.
+    Only YES-lineage pairs proceed to relation classification; NO → parallel.
+    """
+    source_paper: str          # Paper title
+    target_paper: str          # Paper title
+    source_claim: str          # Claim statement text
+    target_claim: str          # Claim statement text
+    relation: str              # attack|replace|improve|extend|support|parallel
+    explanation: str           # One sentence explaining why
+    source_year: int
+    target_year: int
 
     def to_dict(self) -> dict:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "ClaimRelation":
+        return cls(
+            source_paper=d.get("source_paper", ""),
+            target_paper=d.get("target_paper", ""),
+            source_claim=d.get("source_claim", ""),
+            target_claim=d.get("target_claim", ""),
+            relation=d.get("relation", "unknown"),
+            explanation=d.get("explanation", ""),
+            source_year=d.get("source_year", 0),
+            target_year=d.get("target_year", 0),
+        )
+
+
+@dataclass
+class Tension:
+    """A research tension — a contradiction that drives the field forward.
+
+    Tension is the first citizen of V5 narrative. It connects what happened inside
+    the field (Claims, Relations) to what the reader wants to know (why did X replace Y?).
+    """
+    tension: str               # Short label (e.g. "Dense vs Sparse Representation")
+    description: str           # Detailed description of the contradiction
+    introduced_by: list[str]   # Paper titles that first exposed this tension
+    resolved_by: list[str]     # Paper titles that advanced or favored a direction
+    status: str                # direction_clear | direction_forming | open
+    dimension: str             # representation|geometry|system|evaluation
+    domain_scope: str = ""     # e.g. "in detection/tracking", "in occupancy"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Tension":
+        return cls(
+            tension=d.get("tension", ""),
+            description=d.get("description", ""),
+            introduced_by=d.get("introduced_by", []),
+            resolved_by=d.get("resolved_by", []),
+            status=d.get("status", "open"),
+            dimension=d.get("dimension", "system"),
+            domain_scope=d.get("domain_scope", ""),
+        )
+
+
+@dataclass
+class Direction:
+    """A research direction — where the evidence points on a question.
+
+    Direction is the CONCLUSION of a ResearchQuestion's debate. It captures
+    what answer the evidence favors, how strong that evidence is, and which
+    papers support or oppose it.
+
+    Distinct from ParadigmShift: Direction is per-RQ ("the community favors
+    implicit geometry"), ParadigmShift is cross-RQ ("Dense→Sparse changed
+    the field's representation philosophy").
+    """
+    statement: str               # e.g. "Implicit geometry learning is sufficient"
+    support_papers: list[str]    # Papers whose evidence supports this direction
+    opposing_papers: list[str]   # Papers that challenge or complicate this direction
+    confidence: str = "medium"   # "high" | "medium" | "low"
+    evidence_summary: str = ""   # 1-2 sentences summarizing key evidence
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Direction":
+        return cls(
+            statement=d.get("statement", ""),
+            support_papers=d.get("support_papers", []),
+            opposing_papers=d.get("opposing_papers", []),
+            confidence=d.get("confidence", "medium"),
+            evidence_summary=d.get("evidence_summary", ""),
+        )
+
+
+@dataclass
+class ParadigmShift:
+    """A paradigm shift — when the field's collective belief fundamentally changed.
+
+    Strictly distinguished from technique evolution: a paradigm shift overturns
+    a core assumption; technique evolution improves within the same assumption.
+    """
+    shift_name: str            # e.g. "Dense BEV → Sparse Representation"
+    description: str           # 2-3 sentences: what changed and why it mattered
+    old_paradigm: str          # What the field believed before
+    new_paradigm: str          # What the field believed after
+    catalyst_papers: list[str] # Papers that triggered or crystallized this shift
+    magnitude: str             # paradigm_shift | optimization | convergence
+    level: str                 # research_question | method | evaluation
+    dimension: str             # representation | geometry | system | evaluation
+    year_range: str            # e.g. "2022-2024"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ParadigmShift":
+        return cls(
+            shift_name=d.get("shift_name", ""),
+            description=d.get("description", ""),
+            old_paradigm=d.get("old_paradigm", ""),
+            new_paradigm=d.get("new_paradigm", ""),
+            catalyst_papers=d.get("catalyst_papers", []),
+            magnitude=d.get("magnitude", "incremental"),
+            level=d.get("level", "method"),
+            dimension=d.get("dimension", "system"),
+            year_range=d.get("year_range", ""),
+        )
+
+
+@dataclass
+class Phase:
+    """A time period with a core contradiction — V8's narrative chapter unit.
+
+    Phase is not a new entity — it emerges from clustering Tensions by time+theme.
+    Each Phase is a chapter in the narrative, linked by causal chain:
+    Phase N's unresolved_problem → Phase N+1's core_contradiction.
+    """
+    name: str                        # e.g. "Dense BEV Era"
+    time_range: str                  # e.g. "2020-2022"
+    core_contradiction: str          # 1-sentence core contradiction
+    key_papers: list[str]            # 3-6 key paper titles
+    core_debate: str                 # What the field was debating in this phase
+    unresolved_problem: str          # → becomes next phase's motivation
+    tensions: list[Tension] = field(default_factory=list)  # Tensions clustered into this phase
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["tensions"] = [t.to_dict() for t in self.tensions]
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Phase":
+        return cls(
+            name=d.get("name", ""),
+            time_range=d.get("time_range", ""),
+            core_contradiction=d.get("core_contradiction", ""),
+            key_papers=d.get("key_papers", []),
+            core_debate=d.get("core_debate", ""),
+            unresolved_problem=d.get("unresolved_problem", ""),
+            tensions=[Tension.from_dict(t) for t in d.get("tensions", [])],
+        )
+
+
+@dataclass
+class ResearchQuestion:
+    """A research question — V8: Phase content, not chapter title.
+
+    RQs capture the questions the field debated. They are more stable than Tensions
+    but don't make good chapter titles (break time causal chain). In V8, RQs are
+    the "plot" within a Phase — each Phase may involve 1-2 RQs debated by papers.
+    """
+    question: str              # Full question text, e.g. "Is explicit depth supervision necessary?"
+    short_name: str            # Short label, e.g. "Depth Necessity"
+    description: str           # 1-2 sentences of context
+    level: str                 # "field" | "paradigm" | "engineering"
+    status: str                # direction_clear | direction_forming | open
+    positions: list[dict]      # [{"paper": "...", "position": "...", "evidence": "..."}]
+    introduced_by: list[str]   # Paper titles that raised this question
+    tensions: list[Tension] = field(default_factory=list)  # Subordinate tensions within this RQ
+    direction: Optional[Direction] = None  # Where the evidence points
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        if self.direction:
+            d["direction"] = self.direction.to_dict()
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ResearchQuestion":
+        direction = d.get("direction")
+        return cls(
+            question=d.get("question", ""),
+            short_name=d.get("short_name", ""),
+            description=d.get("description", ""),
+            level=d.get("level", "paradigm"),
+            status=d.get("status", "open"),
+            positions=d.get("positions", []),
+            introduced_by=d.get("introduced_by", []),
+            tensions=[Tension.from_dict(t) for t in d.get("tensions", [])],
+            direction=Direction.from_dict(direction) if direction else None,
+        )
+
+
+@dataclass
+class NarrativeSection:
+    """One chapter of the V8 narrative — organized by Phase (time period).
+
+    V8 change: each section centers on one Phase (time-based tension cluster),
+    not on ResearchQuestion. Phases are linked by causal chain:
+    Phase N's unresolved_problem → Phase N+1's core_contradiction.
+
+    The professor-teaching model: "Last week we ended with a problem: [unresolved].
+    This week: [Phase name]. The core debate was..."
+    """
+    title: str                 # Phase name, e.g. "Phase 1: Dense BEV Era (2020-2022)"
+    phase: Phase               # The Phase this section covers
+    claims: list[Claim] = field(default_factory=list)
+    claim_relations: list[ClaimRelation] = field(default_factory=list)
+    paradigm_shifts: list[ParadigmShift] = field(default_factory=list)
+    direction: Optional[Direction] = None  # Where evidence points within this phase
+    narrative: str = ""        # Professor-style lecture narrative
+
+    def to_dict(self) -> dict:
+        d = {
+            "title": self.title,
+            "phase": self.phase.to_dict(),
+            "claims": [c.to_dict() for c in self.claims],
+            "claim_relations": [r.to_dict() for r in self.claim_relations],
+            "paradigm_shifts": [p.to_dict() for p in self.paradigm_shifts],
+            "narrative": self.narrative,
+        }
+        if self.direction:
+            d["direction"] = self.direction.to_dict()
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NarrativeSection":
+        direction = d.get("direction")
+        return cls(
+            title=d.get("title", ""),
+            phase=Phase.from_dict(d.get("phase", {})),
+            claims=[Claim.from_dict(c) for c in d.get("claims", [])],
+            claim_relations=[ClaimRelation.from_dict(r) for r in d.get("claim_relations", [])],
+            paradigm_shifts=[ParadigmShift.from_dict(p) for p in d.get("paradigm_shifts", [])],
+            direction=Direction.from_dict(direction) if direction else None,
+            narrative=d.get("narrative", ""),
+        )
+
 
 @dataclass
 class ResearchNarrative:
-    """V4 output: a field's complete technical evolution story."""
+    """V8 output: a field's complete technical evolution story.
+
+    Organized by Phase (NarrativeSection), linked by causal chain.
+    RQs are Phase content, not chapter titles.
+    """
     field_name: str
     seed_paper_id: Optional[str] = None
     overview: str = ""
-    branches: list[Branch] = field(default_factory=list)
-    cross_branch_edges: list[EvolutionEdge] = field(default_factory=list)
+    sections: list[NarrativeSection] = field(default_factory=list)
+    phases: list[Phase] = field(default_factory=list)
+    paradigm_shifts: list[ParadigmShift] = field(default_factory=list)
+    research_questions: list[ResearchQuestion] = field(default_factory=list)
+    tensions: list[Tension] = field(default_factory=list)
+    claims: list[Claim] = field(default_factory=list)
+    claim_relations: list[ClaimRelation] = field(default_factory=list)
     synthesis: str = ""
 
     def to_dict(self) -> dict:
@@ -300,7 +519,12 @@ class ResearchNarrative:
             "field_name": self.field_name,
             "seed_paper_id": self.seed_paper_id,
             "overview": self.overview,
-            "branches": [b.to_dict() for b in self.branches],
-            "cross_branch_edges": [e.to_dict() for e in self.cross_branch_edges],
+            "sections": [s.to_dict() for s in self.sections],
+            "phases": [p.to_dict() for p in self.phases],
+            "paradigm_shifts": [p.to_dict() for p in self.paradigm_shifts],
+            "research_questions": [q.to_dict() for q in self.research_questions],
+            "tensions": [t.to_dict() for t in self.tensions],
+            "claims": [c.to_dict() for c in self.claims],
+            "claim_relations": [r.to_dict() for r in self.claim_relations],
             "synthesis": self.synthesis,
         }

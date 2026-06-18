@@ -47,6 +47,17 @@ data, removing the need for explicit depth supervision"
 without requiring explicit depth estimation"
     These assert WHAT IS TRUE about the approach. They are falsifiable.
 
+CLAIM LEVELS — classify each claim into one of three levels:
+- "paradigm": Changes fundamental belief about what works. The claim redefines \
+what the field considers possible or necessary. Example: "Camera-only BEV \
+perception without LiDAR is feasible for 3D detection."
+- "methodological": Proposes or validates a specific technique/approach that's \
+better than alternatives. Example: "Explicit depth supervision improves BEV \
+detection accuracy by 40% over implicit methods."
+- "engineering": Addresses practical constraints, implementation details, or \
+training recipes. Example: "Perspective supervision enables using any modern \
+image backbone without depth pre-training."
+
 A good Claim:
 1. Is falsifiable — an experiment could in principle prove it wrong
 2. Contains a comparative or absolute judgment (better/faster/sufficient/\
@@ -60,7 +71,7 @@ A bad Claim (do NOT extract):
 3. Is too vague to be falsifiable ("our method is effective")
 4. Reports a result without the claim BEHIND the result
 
-For each paper, extract 2-4 claims. Each claim must pass the falsifiability \
+For each paper, extract 4-6 claims. Each claim must pass the falsifiability \
 test: "Could someone design an experiment that would prove this wrong?"
 
 Return ONLY a JSON array. No other text."""
@@ -98,7 +109,8 @@ NMS and anchor generation",
 anchors; panoptic segmentation extension shows generality",
     "problem_addressed": "Object detection pipelines rely on hand-crafted \
 components (NMS, anchors) that encode task-specific priors",
-    "claim_type": "introduces"
+    "claim_type": "introduces",
+    "claim_level": "paradigm"
   },
   {
     "statement": "A transformer encoder-decoder with learned object queries \
@@ -108,7 +120,8 @@ predictions in parallel",
 R-CNN; attention maps show global reasoning behavior",
     "problem_addressed": "Traditional detectors process objects independently \
 without modeling global relationships",
-    "claim_type": "introduces"
+    "claim_type": "introduces",
+    "claim_level": "methodological"
   }
 ]
 ```"""
@@ -237,10 +250,11 @@ AUTHORS: {', '.join(paper.authors[:5])}{'...' if len(paper.authors) > 5 else ''}
 
 ---
 
-Extract 2-4 falsifiable claims from this paper. Each claim must:
+Extract 4-6 falsifiable claims from this paper. Each claim must:
 1. Be a judgment about what is true/better, not a method description
 2. Be falsifiable
 3. Include specific evidence
+4. Include a claim_level (paradigm/methodological/engineering)
 
 Return JSON array only:
 ```json
@@ -249,7 +263,8 @@ Return JSON array only:
     "statement": "...",
     "evidence": "...",
     "problem_addressed": "...",
-    "claim_type": "introduces|improves|replaces|extends"
+    "claim_type": "introduces|improves|replaces|extends",
+    "claim_level": "paradigm|methodological|engineering"
   }}
 ]
 ```"""
@@ -319,6 +334,7 @@ def _parse_response(raw: str, paper: Paper) -> list[Claim]:
             evidence=item.get("evidence", "").strip(),
             problem_addressed=item.get("problem_addressed", "").strip(),
             claim_type=item.get("claim_type", "introduces"),
+            claim_level=item.get("claim_level", "methodological"),
         ))
 
     return claims

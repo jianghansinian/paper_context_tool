@@ -37,7 +37,7 @@ from openai import OpenAI
 
 import config
 from llm_analyzer import _resolve_model
-from paper import Claim
+from paper import Claim, ParadigmShift
 
 
 # ── System prompt ─────────────────────────────────────────────────────
@@ -163,29 +163,17 @@ Return JSON:
 
 def detect_paradigm_shifts(
     claims: list[Claim],
-    relations: list[dict],
+    relations: list,  # list[ClaimRelation] or list[dict]
     phases: list[dict],
-    tensions: list[dict] | None = None,
+    tensions: list | None = None,  # list[Tension] or list[dict]
     field_name: str = "BEV Perception",
     *,
     client: Optional[OpenAI] = None,
     model: Optional[str] = None,
-) -> Optional[list[dict]]:
+) -> Optional[list[ParadigmShift]]:
     """Detect paradigm shifts from claims, relations, phases, and tensions.
 
-    Args:
-        claims: All claims (flat list, chronologically ordered)
-        relations: Claim relations from claim_relation_builder
-        phases: Phase dicts from propose_structure
-        tensions: Research tensions from tension_detector (optional)
-        field_name: Field name
-        client: LLM client
-        model: Model override
-
-    Returns:
-        List of paradigm shift dicts, each with: shift_name, description,
-        old_paradigm, new_paradigm, catalyst_papers, magnitude, level, phase, year_range.
-        None on failure.
+    Returns list of ParadigmShift objects. None on failure.
     """
     if not claims:
         return None
@@ -212,14 +200,15 @@ def detect_paradigm_shifts(
         )
     claims_text = "\n\n".join(claims_lines)
 
-    # Format relations
+    # Format relations (handles both ClaimRelation dataclass and legacy dict)
     if relations:
         rel_lines = []
         for r in relations:
-            rel_lines.append(
-                f"{r['source_paper']} → {r['target_paper']}: "
-                f"{r['relation'].upper()} — {r['explanation']}"
-            )
+            if hasattr(r, 'source_paper'):
+                src, tgt, rel, expl = r.source_paper, r.target_paper, r.relation, r.explanation
+            else:
+                src, tgt, rel, expl = r['source_paper'], r['target_paper'], r['relation'], r['explanation']
+            rel_lines.append(f"{src} → {tgt}: {rel.upper()} — {expl}")
         relations_text = "\n".join(rel_lines)
     else:
         relations_text = "(no relations available)"
@@ -234,14 +223,18 @@ def detect_paradigm_shifts(
         )
     phases_text = "\n".join(phases_lines)
 
-    # Format tensions
+    # Format tensions (handles both Tension dataclass and legacy dict)
     if tensions:
         t_lines = []
         for t in tensions:
+            if hasattr(t, 'tension'):
+                name, desc, status = t.tension, t.description, t.status
+            else:
+                name, desc, status = t.get('tension', '?'), t.get('description', ''), t.get('status', '?')
             t_lines.append(
-                f"Tension: {t.get('tension', '?')}\n"
-                f"  {t.get('description', '')}\n"
-                f"  Status: {t.get('status', '?')}"
+                f"Tension: {name}\n"
+                f"  {desc}\n"
+                f"  Status: {status}"
             )
         tensions_text = "\n".join(t_lines)
     else:
@@ -270,9 +263,22 @@ def detect_paradigm_shifts(
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
         raw = re.sub(r"\s*```$", "", raw)
         data = json.loads(raw)
-        shifts = data.get("paradigm_shifts", [])
-        if shifts and isinstance(shifts, list):
-            return shifts
+        raw_shifts = data.get("paradigm_shifts", [])
+        if raw_shifts and isinstance(raw_shifts, list):
+            return [
+                ParadigmShift(
+                    shift_name=s.get("shift_name", ""),
+                    description=s.get("description", ""),
+                    old_paradigm=s.get("old_paradigm", ""),
+                    new_paradigm=s.get("new_paradigm", ""),
+                    catalyst_papers=s.get("catalyst_papers", []),
+                    magnitude=s.get("magnitude", "incremental"),
+                    level=s.get("level", "method"),
+                    dimension=s.get("dimension", "system"),
+                    year_range=s.get("year_range", ""),
+                )
+                for s in raw_shifts
+            ]
     except Exception as exc:
         print(f"Paradigm shift detection failed: {exc}")
 
@@ -280,7 +286,7 @@ def detect_paradigm_shifts(
 
 
 def format_shifts_for_narrative(
-    shifts: list[dict],
+    shifts: list,  # list[ParadigmShift] or list[dict]
     phase_name: str = "",
 ) -> str:
     """Format paradigm shifts as readable context for narrative prompt injection.
@@ -292,7 +298,9 @@ def format_shifts_for_narrative(
 
     relevant = shifts
     if phase_name:
-        relevant = [s for s in shifts if s.get("phase", "") == phase_name]
+        relevant = [s for s in shifts if (
+            s.phase if hasattr(s, 'phase') else s.get("phase", "")
+        ) == phase_name]
 
     if not relevant:
         return ""
@@ -303,17 +311,29 @@ def format_shifts_for_narrative(
         "a moment when the field's understanding fundamentally changed.",
     ]
     for s in relevant:
-        magnitude = s.get("magnitude", "?").upper()
-        level = s.get("level", "?").replace("_", " ").upper()
-        lines.append(f"\n  Shift: {s['shift_name']} [{magnitude}] [{level}]")
-        lines.append(f"    From: {s['old_paradigm']}")
-        lines.append(f"    To:   {s['new_paradigm']}")
-        lines.append(f"    {s['description']}")
-        lines.append(f"    Catalyst: {', '.join(s.get('catalyst_papers', []))}")
+        if hasattr(s, 'shift_name'):
+            name, old, new, desc, cat, mag, lvl = (
+                s.shift_name, s.old_paradigm, s.new_paradigm,
+                s.description, s.catalyst_papers, s.magnitude, s.level
+            )
+        else:
+            name = s['shift_name']
+            old, new = s['old_paradigm'], s['new_paradigm']
+            desc = s['description']
+            cat = s.get('catalyst_papers', [])
+            mag = s.get('magnitude', '?')
+            lvl = s.get('level', '?')
+        magnitude = mag.upper()
+        level = lvl.replace("_", " ").upper()
+        lines.append(f"\n  Shift: {name} [{magnitude}] [{level}]")
+        lines.append(f"    From: {old}")
+        lines.append(f"    To:   {new}")
+        lines.append(f"    {desc}")
+        lines.append(f"    Catalyst: {', '.join(cat)}")
     return "\n".join(lines)
 
 
-def shifts_to_markdown(shifts: list[dict]) -> str:
+def shifts_to_markdown(shifts: list) -> str:
     """Render paradigm shifts as a markdown section, grouped by dimension.
 
     Each dimension represents an independent evolution thread:
@@ -321,9 +341,16 @@ def shifts_to_markdown(shifts: list[dict]) -> str:
     - geometry: explicit depth → learned attention → hybrid
     - system: modular → unified → end-to-end
     - evaluation: accuracy → efficiency → safety
+
+    Accepts list[ParadigmShift] or list[dict].
     """
     if not shifts:
         return ""
+
+    def _get(s, key, default=""):
+        if hasattr(s, key):
+            return getattr(s, key, default)
+        return s.get(key, default)
 
     # Group shifts by dimension
     dimension_order = ["representation", "geometry", "system", "evaluation"]
@@ -340,9 +367,9 @@ def shifts_to_markdown(shifts: list[dict]) -> str:
         "evaluation": "📊",
     }
 
-    grouped: dict[str, list[dict]] = {}
+    grouped: dict[str, list] = {}
     for s in shifts:
-        dim = s.get("dimension", "system")
+        dim = _get(s, "dimension", "system")
         if dim not in grouped:
             grouped[dim] = []
         grouped[dim].append(s)
@@ -356,8 +383,6 @@ def shifts_to_markdown(shifts: list[dict]) -> str:
     }
 
     lines = [
-        "## 核心范式转移",
-        "",
         "> 技术发展史的本质是范式的更替。以下按维度分组展示该领域经历的根本性信念转变，",
         "> 每个维度是一条独立的思想演化线。",
         "",
@@ -371,15 +396,13 @@ def shifts_to_markdown(shifts: list[dict]) -> str:
     for dim in dimension_order:
         if dim in grouped:
             dim_shifts = grouped[dim]
-            label = dimension_labels.get(dim, dim)
-            # Show the chain: old → new for each shift in this dimension
-            prev_node = None
-            for s in dim_shifts:
-                old = s['old_paradigm'][:30]
-                new = s['new_paradigm'][:30]
-                node_from = f'{dim}_old_{dim_shifts.index(s)}'
-                node_to = f'{dim}_new_{dim_shifts.index(s)}'
-                lines.append(f'    {node_from}["{old}"] -->|"{s["shift_name"][:25]}"| {node_to}["{new}"]')
+            for idx, s in enumerate(dim_shifts):
+                old = _get(s, "old_paradigm", "")[:55]
+                new = _get(s, "new_paradigm", "")[:55]
+                shift_name = _get(s, "shift_name", "")[:35]
+                node_from = f'{dim}_old_{idx}'
+                node_to = f'{dim}_new_{idx}'
+                lines.append(f'    {node_from}["{old}"] -->|"{shift_name}"| {node_to}["{new}"]')
     lines.append("```")
     lines.append("")
 
@@ -395,23 +418,30 @@ def shifts_to_markdown(shifts: list[dict]) -> str:
         lines.append("")
 
         for s in dim_shifts:
-            mag = magnitude_icons.get(s.get("magnitude", ""), s.get("magnitude", "?").upper())
-            level = s.get("level", "?").replace("_", " ").title()
-            period = s.get("year_range", "?")
+            name = _get(s, "shift_name", "")
+            mag = _get(s, "magnitude", "")
+            lvl = _get(s, "level", "?")
+            period = _get(s, "year_range", "?")
+            old = _get(s, "old_paradigm", "")
+            new = _get(s, "new_paradigm", "")
+            desc = _get(s, "description", "")
+            cat = _get(s, "catalyst_papers", [])
 
-            lines.append(f"**{s['shift_name']}** ({period})")
-            lines.append(f"{mag} | {level}")
+            mag_label = magnitude_icons.get(mag, mag.upper())
+            level_label = lvl.replace("_", " ").title()
+
+            lines.append(f"**{name}** ({period})")
+            lines.append(f"{mag_label} | {level_label}")
             lines.append("")
-            lines.append(f"> **前**: *{s['old_paradigm']}*")
+            lines.append(f"> **前**: *{old}*")
             lines.append("")
-            lines.append(f"> **后**: *{s['new_paradigm']}*")
+            lines.append(f"> **后**: *{new}*")
             lines.append("")
-            lines.append(s["description"])
+            lines.append(desc)
             lines.append("")
 
-            catalysts = s.get("catalyst_papers", [])
-            if catalysts:
-                lines.append(f"**代表论文**: {' · '.join(catalysts)}")
+            if cat:
+                lines.append(f"**代表论文**: {' · '.join(cat)}")
             lines.append("")
 
     return "\n".join(lines) + "\n"
