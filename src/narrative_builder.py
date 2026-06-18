@@ -89,7 +89,7 @@ WRITE THE NARRATIVE as a concise historical synthesis, following this structure:
 
 1. **CORE QUESTION** — Bold standalone sentence. The question this phase wrestled with.
 
-2. SETUP — 1-2 sentences. Briefly reference the previous phase's unsolved problem.
+2. SETUP — {setup_instruction}
 
 3. CORE DISCOVERY — This is the heart of the narrative. Lead with the IDEA, not \
    the papers:
@@ -113,6 +113,10 @@ AVOID:
 - Paper-by-paper summaries with contribution/limitation bullet points
 - Repeating the same evidence that appears in the Direction block
 - Listing every metric for every paper
+
+FORMAT: Use paragraph breaks (blank line) between each section (CORE QUESTION, SETUP,
+CORE DISCOVERY, TURNING POINT, TAKEAWAY, UNSOLVED). The CORE DISCOVERY should be
+2-3 paragraphs with natural breaks between idea groups.
 
 Return JSON:
 ```json
@@ -229,7 +233,8 @@ def build_narrative(
 
     for i, phase in enumerate(phases):
         prev_unresolved = phases[i - 1].unresolved_problem if i > 0 else (
-            "How to project 2D camera features into 3D space for autonomous driving perception"
+            "NONE — this is the FIRST phase. Set up the field's original motivation "
+            "directly instead of referencing any previous work."
         )
 
         # Gather papers involved in this phase
@@ -294,6 +299,7 @@ def build_narrative(
             field_name=field_name,
             phase=phase,
             prev_unresolved=prev_unresolved,
+            is_first=(i == 0),
             is_last=(i == len(phases) - 1),
             tensions=phase.tensions,
             research_questions=section_rqs,
@@ -396,7 +402,7 @@ def _build_rq_based(
 
         narrative_text = _generate_phase_narrative(
             client, model, field_name=field_name, phase=phase,
-            prev_unresolved="(see field overview)", is_last=False,
+            prev_unresolved="(see field overview)", is_first=False, is_last=False,
             tensions=rq.tensions, research_questions=[rq],
             direction=rq.direction, claims=section_claims,
             claim_relations=section_relations,
@@ -688,6 +694,7 @@ def _generate_phase_narrative(
     field_name: str,
     phase: Phase,
     prev_unresolved: str,
+    is_first: bool = False,
     is_last: bool,
     tensions: list,
     research_questions: list[ResearchQuestion],
@@ -707,6 +714,13 @@ def _generate_phase_narrative(
         phase_name=phase.name,
         time_range=phase.time_range,
         prev_unresolved=prev_unresolved,
+        setup_instruction=(
+            "1-2 sentences. Briefly reference the previous phase's unsolved problem "
+            "(see PREVIOUS UNSOLVED PROBLEM above)."
+            if not is_first
+            else "SKIP this step. Start the narrative directly from the field's "
+                 "ORIGINAL MOTIVATION — no 'previous phase' exists."
+        ),
         core_contradiction=phase.core_contradiction,
         core_debate=phase.core_debate,
         key_papers=key_papers_text,
