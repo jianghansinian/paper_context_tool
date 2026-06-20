@@ -204,14 +204,16 @@ def _guess_downstream_task(paper_title: str, claims: list[Claim]) -> str:
                                    "end-to-end autonomous", "self-driving"]):
         return "planning"
     # Detection keywords
-    if any(kw in text for kw in ["detection", "3d object", "bevdet",
-                                   "sparsebev", "bevformer", "multi-camera 3d"]):
+    if any(kw in text for kw in ["detection", "detector", "3d object", "bevdet",
+                                   "sparsebev", "bevformer", "multi-camera 3d",
+                                   "sparse4d"]):
         return "detection"
     # Tracking
     if any(kw in text for kw in ["tracking", "multi-object track"]):
         return "tracking"
-    # Prediction
-    if any(kw in text for kw in ["prediction", "trajectory forecast", "motion forecast"]):
+    # Prediction (use compound terms to avoid false match on "velocity prediction" in detection)
+    if any(kw in text for kw in ["trajectory forecast", "motion forecast",
+                                   "behavior prediction", "intent prediction"]):
         return "prediction"
     # Mapping/segmentation
     if any(kw in text for kw in ["mapping", "segmentation", "hd map", "lane"]):
@@ -246,7 +248,7 @@ def build_paper_chain_relations(
 
     # Within each task group: sort by year and build chains
     for task, papers in task_groups.items():
-        papers.sort(key=lambda x: x[1][0].year)
+        papers.sort(key=lambda x: (x[1][0].year, getattr(x[1][0], 'month', 0)))
 
         for i in range(len(papers) - 1):
             pid_a, claims_a = papers[i]
@@ -271,7 +273,7 @@ def build_paper_chain_relations(
 
     # Cross-task pairs: add parallel edges for consecutive papers across task boundaries
     # Sort all papers by year for cross-task linking
-    all_sorted = sorted(claims_by_paper.items(), key=lambda x: x[1][0].year)
+    all_sorted = sorted(claims_by_paper.items(), key=lambda x: (x[1][0].year, getattr(x[1][0], 'month', 0)))
     for i in range(len(all_sorted) - 1):
         pid_a, claims_a = all_sorted[i]
         pid_b, claims_b = all_sorted[i + 1]

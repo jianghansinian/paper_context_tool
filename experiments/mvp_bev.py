@@ -136,13 +136,13 @@ def main():
     # ── Phase 3: Build claim relations (V6: still needed for edges) ──
     print(f"\n[4/7] Building claim relations...")
 
-    # Sort claims by year, then build relations between consecutive papers
-    claims_sorted = sorted(all_claims, key=lambda c: c.year)
+    # Sort claims by year+month, then build relations between consecutive papers
+    claims_sorted = sorted(all_claims, key=lambda c: (c.year, getattr(c, 'month', 0)))
 
     # Group claims by paper for chain building
     claims_by_paper: dict[str, list[Claim]] = {}
     for c in claims_sorted:
-        claims_by_paper.setdefault(c.paper_id, []).append(c)
+        claims_by_paper.setdefault(c.paper_title, []).append(c)
 
     all_relations = build_paper_chain_relations(claims_by_paper, client=client)
 
