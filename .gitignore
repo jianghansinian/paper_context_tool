@@ -1,0 +1,23 @@
+# Local settings
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime data / cache
+output/
+src/output/
+src/data/
+data/paper_cache/
+data/embeddings.pkl
+
+# Debug artifacts
+csdn_login.png
+cutpng.png
+docs/Sparse4D*.html
+docs/Sparse4D*.html:Zone.Identifier
+docs/Sparse4D*_files/
+
+# Third-party static assets (managed by pyvis itself)
+lib/

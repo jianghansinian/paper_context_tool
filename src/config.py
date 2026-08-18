@@ -87,7 +87,7 @@ ARXIV_MAX_PAPERS = int(os.getenv("ARXIV_MAX_PAPERS", "60"))
 OPENALEX_MAX_PAPERS = int(os.getenv("OPENALEX_MAX_PAPERS", "60"))
 LLM_API_KEY = os.getenv("LLM_API_KEY", DEEPSEEK_API_KEY)
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
-LLM_BRANCH_NAMING_MODEL = os.getenv("LLM_BRANCH_NAMING_MODEL", "deepseek-chat")
+LLM_BRANCH_NAMING_MODEL = os.getenv("LLM_BRANCH_NAMING_MODEL", "deepseek-v4-flash")
 HTTP_TIMEOUT_SEC = float(os.getenv("HTTP_TIMEOUT_SEC", "30"))
 
 RECENCY_WEIGHT = float(os.getenv("RECENCY_WEIGHT", "0.15"))
@@ -102,9 +102,12 @@ OUTPUT_VALIDATION_ENABLED = _env_flag("OUTPUT_VALIDATION_ENABLED", "1")
 LLM_ANALYZER_MODEL = os.getenv("LLM_ANALYZER_MODEL", LLM_BRANCH_NAMING_MODEL)
 LLM_ANALYZER_TIMEOUT_SEC = float(os.getenv("LLM_ANALYZER_TIMEOUT_SEC", "60"))
 LLM_ANALYZER_MAX_RETRIES = int(os.getenv("LLM_ANALYZER_MAX_RETRIES", "1"))
+# Reasoning models burn token budget on hidden reasoning; 8192 leaves no room for output.
+LLM_ANALYZER_MAX_TOKENS = int(os.getenv("LLM_ANALYZER_MAX_TOKENS", "32768"))
 
 # --- V3: Seed-paper-centric structured understanding ---
 SS_API_KEY = os.getenv("SS_API_KEY", "")
+OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY", "ozQmZSrRp677FVcaslImKx")
 REFERENCE_MAX_DEPTH = int(os.getenv("REFERENCE_MAX_DEPTH", "2"))
 REFERENCE_TOP_K_LEVEL1 = int(os.getenv("REFERENCE_TOP_K_LEVEL1", "15"))
 REFERENCE_TOP_K_LEVEL2 = int(os.getenv("REFERENCE_TOP_K_LEVEL2", "20"))
@@ -125,3 +128,57 @@ V3_W_CITATION = float(os.getenv("V3_W_CITATION", "0.5"))
 V3_W_RECENCY = float(os.getenv("V3_W_RECENCY", "0.15"))
 V3_W_CITATION_TYPE = float(os.getenv("V3_W_CITATION_TYPE", "0.15"))
 V3_W_REF_FREQ = float(os.getenv("V3_W_REF_FREQ", "0.2"))
+
+# --- V3.3: Data Source ---
+# V3_PRIMARY_API and V3_FALLBACK_API removed in V3.3 — OA is the only primary source
+# SS_API_KEY kept for V3 pipeline backward compatibility (citation_miner.py)
+V3_CACHE_DIR = os.getenv("V3_CACHE_DIR", "data/paper_cache")
+V3_CACHE_TTL_DAYS = int(os.getenv("V3_CACHE_TTL_DAYS", "30"))
+
+# --- V3.1: Seed Generation ---
+V3_SEED_COUNT_MIN = int(os.getenv("V3_SEED_COUNT_MIN", "12"))
+V3_SEED_COUNT_MAX = int(os.getenv("V3_SEED_COUNT_MAX", "18"))
+
+# --- V3.1: Citation Graph Construction ---
+V3_L1_BACKWARD_LIMIT = int(os.getenv("V3_L1_BACKWARD_LIMIT", "30"))
+V3_L1_FORWARD_LIMIT = int(os.getenv("V3_L1_FORWARD_LIMIT", "30"))
+V3_L2_SEEDS = int(os.getenv("V3_L2_SEEDS", "15"))
+V3_L2_BACKWARD_LIMIT = int(os.getenv("V3_L2_BACKWARD_LIMIT", "15"))
+V3_L2_FORWARD_LIMIT = int(os.getenv("V3_L2_FORWARD_LIMIT", "15"))
+V3_COUPLING_MIN_SHARED = int(os.getenv("V3_COUPLING_MIN_SHARED", "3"))
+V3_COUPLING_THRESHOLD = float(os.getenv("V3_COUPLING_THRESHOLD", "0.15"))
+
+# --- V3.3.14: Graph Ranking ---
+# PageRank removed (snowball-graph coverage bias); citation signal = age-adjusted rate
+V3_BETA_PROXIMITY = float(os.getenv("V3_BETA_PROXIMITY", "0.20"))
+V3_GAMMA_CITATION = float(os.getenv("V3_GAMMA_CITATION", "0.80"))
+
+# V3.3.4: Seed boost in graph ranking — compensates for OA citation undercount
+V3_SEED_BOOST = float(os.getenv("V3_SEED_BOOST", "0.15"))
+
+# --- V3.1: Selection ---
+V3_MAX_PAPERS = int(os.getenv("V3_MAX_PAPERS", "40"))
+
+# --- V3.3.12: Seed flood governance ---
+# Auto seed promotion: non-seed cited by >= N seeds AND citation_count >= MIN
+V3_PROMOTE_SEED_IN_EDGES = int(os.getenv("V3_PROMOTE_SEED_IN_EDGES", "2"))
+V3_PROMOTE_MIN_CIT = int(os.getenv("V3_PROMOTE_MIN_CIT", "100"))
+# Non-seed quota in final selection (graph-discovered papers guarantee)
+V3_NONSEED_QUOTA = int(os.getenv("V3_NONSEED_QUOTA", "8"))
+# Step 5 LLM classification candidate count
+# V3.3.13: widened 150 -> 300 so graph-discovered field papers ranked below
+# top-150 (BEVDet4D class, scores 0.26-0.28) enter the classification window
+V3_CLASSIFY_TOP_K = int(os.getenv("V3_CLASSIFY_TOP_K", "300"))
+
+# --- V3.3.13: Venue supplement admission gate ---
+# Venue supplements enter Step 5 candidates only if their citation_count is
+# >= this percentile of same-year papers in the graph
+V3_VENUE_ADMIT_YEAR_PCTL = int(os.getenv("V3_VENUE_ADMIT_YEAR_PCTL", "50"))
+
+# --- V3.3.10: Expansion + Performance ---
+# Forward citation mixed sampling: fraction of the limit reserved for newest papers
+V3_FORWARD_RECENT_FRACTION = float(os.getenv("V3_FORWARD_RECENT_FRACTION", "0.33"))
+# Parallel API workers for seed resolution and citation expansion
+V3_API_WORKERS = int(os.getenv("V3_API_WORKERS", "4"))
+
+

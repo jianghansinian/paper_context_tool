@@ -75,9 +75,9 @@ UNINTELLIGIBLE or OBVIOUSLY WRONG without understanding the shift itself? \
 If yes → paradigm shift. If they'd see it as a natural improvement → technique \
 evolution.
 
-You MUST return AT MOST 3 paradigm shifts. If you find more than 3, keep only \
-the 3 most fundamental ones (those that changed the research question or core \
-assumption, not the method or evaluation). Quality over quantity.
+Identify all genuine paradigm shifts the evidence supports. Do NOT limit the
+number — a shift is a shift regardless of how many there are. Quality over
+quantity still applies: only return genuine paradigm shifts, not technique evolution.
 
 Return ONLY a JSON object. No other text."""
 
@@ -100,8 +100,8 @@ PHASES (LLM-identified paradigm eras):
 RESEARCH TENSIONS (field-level contradictions):
 {tensions_text}
 
-Identify AT MOST 3 paradigm shifts. A paradigm shift must pass the LITMUS TEST: \
-would a researcher from before this shift find the new approach fundamentally \
+Identify all paradigm shifts in this field's evolution. A paradigm shift must pass \
+	the LITMUS TEST: would a researcher from before this shift find the new approach \
 wrong or unintelligible? If they'd see it as a natural improvement, it's technique \
 evolution, not a paradigm shift.
 
@@ -135,8 +135,8 @@ MAGNITUDE GUIDE:
 - optimization: Same paradigm, substantially more efficient implementation
 - convergence: Two separate approaches merged into one framework
 
-YOUR RESPONSE MUST CONTAIN AT MOST 3 SHIFTS. If tempted to add more, keep only \
-the most fundamental ones.
+	There is no fixed limit on the number of shifts. If the evidence supports 5 shifts,
+	output 5. If it supports 2, output 2. Do not force a count.
 
 Return JSON:
 ```json
@@ -216,11 +216,16 @@ def detect_paradigm_shifts(
     # Format phases
     phases_lines = []
     for p in phases:
-        phases_lines.append(
-            f"Phase: {p['name']} ({p.get('time_range', '?')})\n"
-            f"  Paradigm: {p.get('core_paradigm', '?')}\n"
-            f"  Papers: {', '.join(p.get('paper_arxiv_ids', []))}"
-        )
+        if hasattr(p, 'name'):
+            phases_lines.append(
+                f"Phase: {p.name} ({p.time_range or '?'})\n"
+                f"  Papers: {', '.join(p.key_papers)}"
+            )
+        else:
+            phases_lines.append(
+                f"Phase: {p['name']} ({p.get('time_range', '?')})\n"
+                f"  Papers: {', '.join(p.get('key_papers', p.get('paper_arxiv_ids', [])))}"
+            )
     phases_text = "\n".join(phases_lines)
 
     # Format tensions (handles both Tension dataclass and legacy dict)

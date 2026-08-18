@@ -455,13 +455,15 @@ Phase 3: "What Is the Optimal Representation for End-to-End Driving?" (2023-2024
 ```
 ### 4.2 Pipeline
 
+> **当前实现主路径**：≤50 篇论文的领域演化分析走 one-shot 方案 B（`analyze_field_one_shot` → `generate_evolution_md`，N+3 次 LLM 调用，结构化 6 节文档），设计见 `design_stage_boundary.md` §5-§6.6（v4.5，3-axis 框架）。下方 A-H 为多步管线（Scheme A）设计，用于 >50 篇或需要更高可控性的场景。E2E 编排见 `design_pipeline_e2e.md`。
+
 ```
 输入：领域描述 / 种子论文
   ↓
-Phase A: 论文检索 (paper_retriever)
-  ├─ 阶段1: Citation Expansion（backward + forward，50-100篇，高精度）
-  ├─ 阶段2: Problem-based Semantic Search（用提取的 problem 做查询，补充遗漏）
-  └─ 目标候选池: 80-120篇
+Phase A: 论文检索 (paper_retriever_v3 — V3 种子驱动引用图检索，E2E V3 起)
+  ├─ 设计见 design_retriever_v3.md（seed → citation graph → ranking → diversified selection）
+  ├─ 输出: 40 篇 dict {title, year, abstract, arxiv_id, citation_count, graph_score, is_seed}
+  └─ 旧设计（两阶段: Citation Expansion + Problem-based Semantic Search）已由 V3 取代
 
 Phase B: 论文理解 (paper_understanding)
   ├─ 复用 V3 的 analyze_paper_structure()
@@ -958,8 +960,8 @@ def locate_paper_in_narrative(paper_id: str, narrative: ResearchNarrative) -> Pa
 ### 7.4 待完成（远期）
 
 **中期**：
-1. 实现 `paper_retriever.py` — 两阶段自动检索
-2. 端到端测试（从种子论文到完整叙事）
+1. ~~实现 `paper_retriever.py` — 两阶段自动检索~~ → 已由 V3 检索（`paper_retriever_v3.py`，E2E V3）取代并验证
+2. ~~端到端测试（从种子论文到完整叙事）~~ → 已完成：`src/run_v4.py` 单入口 E2E（检索 → one-shot 分析 → 叙事）
 
 **远期**：
 3. V3/V4 集成（V3 输出增加"在领域演化中的位置"section）
@@ -1009,8 +1011,11 @@ src/
   config.py                    # 配置
 
   # V4 — 领域叙事引擎
-  run_v4.py                       # V4 入口
-  paper_retriever.py              # 两阶段论文检索（待实现）
+  run_v4.py                       # V4 E2E 入口（V3 检索 → one-shot 分析 → 叙事）
+  paper_retriever_v3.py           # V3 种子驱动引用图检索（已实现）
+  one_shot_analyzer.py            # 方案 B 主路径：one-shot 分析（已实现）
+  one_shot_narrative.py           # 方案 B 结构化叙事（overview + per-phase + synthesis，已实现）
+  paper_retriever.py              # 旧 V2.3.1 两阶段检索（历史，仅供对照）
   claim_extractor.py              # Claim 提取（核心）
   claim_relation_builder.py       # ClaimRelation 单次分类
   research_question_detector.py   # RQ 检测 — V8 Phase 内"情节"，不再是章节标题

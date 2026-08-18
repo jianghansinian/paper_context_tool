@@ -186,14 +186,23 @@ def extract_claims(
 
     text = paper.abstract or ""
     if paper.full_text:
-        # Include introduction/conclusion if available (first + last 4000 chars
-        # of full text)
-        intro = paper.full_text[:4000] if paper.full_text else ""
-        conclusion = _extract_conclusion(paper.full_text) if paper.full_text else ""
-        if conclusion:
-            text = f"{text}\n\nINTRODUCTION:\n{intro}\n\nCONCLUSION:\n{conclusion}"
-        elif intro:
-            text = f"{text}\n\nPAPER TEXT:\n{intro}"
+        sections = _extract_sections(paper.full_text)
+        parts = [text]
+        if sections["introduction"]:
+            parts.append(f"INTRODUCTION:\n{sections['introduction']}")
+        if sections["related_work"]:
+            parts.append(f"RELATED WORK:\n{sections['related_work']}")
+        if sections["background"]:
+            parts.append(f"BACKGROUND:\n{sections['background']}")
+        if sections["conclusion"]:
+            parts.append(f"CONCLUSION:\n{sections['conclusion']}")
+        if len(parts) == 1:
+            # No sections found — fall back to first + last chunks
+            parts.append(f"PAPER TEXT:\n{paper.full_text[:5000]}")
+            tail = paper.full_text[-3000:]
+            if tail:
+                parts.append(f"TAIL:\n{tail}")
+        text = "\n\n".join(parts)
 
     if not text.strip():
         print(f"Claim extraction: no text available for {paper.title[:60]}")
@@ -212,29 +221,111 @@ def _build_client() -> Optional[OpenAI]:
         return None
 
 
-def _extract_conclusion(full_text: str) -> str:
-    """Extract the conclusion/discussion section from full text."""
+def _extract_sections(full_text: str) -> dict[str, str]:
+    """Extract introduction, related work, background, and conclusion from full text.
+
+    Uses regex to find section boundaries. Returns dict with keys:
+    introduction, related_work, background, conclusion — each a trimmed string.
+    """
     if not full_text:
-        return ""
-    patterns = [
-        r"(?i)\b(conclusion|concluding\s+remarks|discussion)\b",
-        r"(?i)\b(limitations?\s+and\s+(future|conclusion))\b",
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, full_text)
-        if m:
-            start = m.start()
-            # Take ~3000 chars from conclusion start
-            return full_text[start:start + 3000]
-    # Fallback: last 2000 chars
-    return full_text[-2000:]
+        return {"introduction": "", "related_work": "", "background": "", "conclusion": ""}
+
+    # Normalize: collapse whitespace but keep paragraph breaks
+    cleaned = re.sub(r"[ \t]+", " ", full_text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    # Find all section headers with their positions
+    # Matches: "1. Introduction", "I. INTRODUCTION", "2 Related Work", etc.
+    section_pattern = re.compile(
+        r"(?:^|\n)\s*"
+        r"(?:(?:[IVX]+|\d+)[\.\)]\s+)?"        # optional number prefix
+        r"([A-Z][A-Za-z\s\-]+)"                 # section title
+        r"(?:\s*\.{3,})?"                       # optional dots (TOC)
+        r"\s*\n",
+        re.MULTILINE,
+    )
+
+    # Map section titles to canonical names
+    intro_patterns = re.compile(
+        r"(?i)^(introduction|intro)$"
+    )
+    related_work_patterns = re.compile(
+        r"(?i)^(related\s*work|related\s*research|literature\s*review|previous\s*work)$"
+    )
+    background_patterns = re.compile(
+        r"(?i)^(background|preliminar|preliminary|problem\s*formulation|problem\s*statement)$"
+    )
+    conclusion_patterns = re.compile(
+        r"(?i)^(conclusion|discussion|concluding\s*remarks|limitations?\s*(and|&)\s*future|summary)$"
+    )
+
+    sections: dict[str, list[tuple[int, int]]] = {
+        "introduction": [],
+        "related_work": [],
+        "background": [],
+        "conclusion": [],
+    }
+
+    for m in section_pattern.finditer(cleaned):
+        title = m.group(1).strip()
+        start = m.end()
+        if intro_patterns.match(title):
+            sections["introduction"].append((start, title))
+        elif related_work_patterns.match(title):
+            sections["related_work"].append((start, title))
+        elif background_patterns.match(title):
+            sections["background"].append((start, title))
+        elif conclusion_patterns.match(title):
+            sections["conclusion"].append((start, title))
+
+    # Also find "next section" boundaries for each match
+    all_section_starts = sorted(
+        [(s, "intro") for s, _ in sections["introduction"]]
+        + [(s, "rw") for s, _ in sections["related_work"]]
+        + [(s, "bg") for s, _ in sections["background"]]
+        + [(s, "conc") for s, _ in sections["conclusion"]]
+    )
+
+    def _extract_section_at(start: int, max_chars: int = 5000) -> str:
+        """Extract text from position, stopping at next section or max_chars."""
+        end = start + max_chars
+        # Stop at next section if closer
+        for s_pos, _ in all_section_starts:
+            if s_pos > start and s_pos < end:
+                end = s_pos
+                break
+        return cleaned[start:end].strip()
+
+    result = {}
+    for key in ("introduction", "related_work", "background", "conclusion"):
+        if sections[key]:
+            result[key] = _extract_section_at(sections[key][0][0])
+        else:
+            result[key] = ""
+
+    # Fallback: if no introduction found, use first ~5000 chars
+    if not result["introduction"]:
+        result["introduction"] = cleaned[:5000].strip()
+    # Fallback for conclusion: scan for conclusion-like keywords
+    if not result["conclusion"]:
+        for pattern in [
+            r"(?i)\n\s*((?:\d+\.?\s*)?(?:conclusion|discussion|concluding\s+remarks))\s*\n",
+        ]:
+            m = re.search(pattern, cleaned)
+            if m:
+                result["conclusion"] = cleaned[m.end():m.end() + 3000].strip()
+                break
+        if not result["conclusion"]:
+            result["conclusion"] = cleaned[-3000:].strip()
+
+    return result
 
 
 def _build_prompt(paper: Paper, text: str) -> str:
     """Build the claim extraction prompt with few-shot examples."""
 
-    # Truncate text to ~8K chars to leave room for few-shot examples
-    max_text = 8000
+    # Truncate to ~12K chars to fit abstract+intro+related_work+conclusion
+    max_text = 12000
     if len(text) > max_text:
         text = text[:max_text]
 

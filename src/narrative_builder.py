@@ -761,7 +761,7 @@ def _generate_field_overview_v8(
 ) -> str:
     """Generate field-level overview: Phase预告."""
     if phases:
-        from tension_detector import phases_to_text
+        from problem_phase_detector import phases_to_text
         phases_text = phases_to_text(phases)
     else:
         phases_text = "(Phases not yet detected — organized by research questions)"

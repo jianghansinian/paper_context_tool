@@ -388,14 +388,15 @@ class Phase:
     Each Phase is a chapter in the narrative, linked by causal chain:
     Phase N's unresolved_problem → Phase N+1's core_contradiction.
     """
-    name: str                        # e.g. "Dense BEV Era"
-    time_range: str                  # e.g. "2020-2022"
+    name: str                        # e.g. "How to Build a 3D View from 2D Images?"
+    time_range: str                  # e.g. "2020-08—2022-11"
     core_contradiction: str          # 1-sentence core contradiction
     key_papers: list[str]            # 3-6 key paper titles
     core_debate: str                 # What the field was debating in this phase
     unresolved_problem: str          # → becomes next phase's motivation
     dominant_question: str = ""      # Core question driving this phase (structural anchor, stable across runs)
-    tensions: list[Tension] = field(default_factory=list)  # Tensions clustered into this phase
+    tensions: list[Tension] = field(default_factory=list)  # Internal tensions within this phase
+    status: str = ""                 # direction_clear | direction_forming | open
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -413,6 +414,63 @@ class Phase:
             unresolved_problem=d.get("unresolved_problem", ""),
             dominant_question=d.get("dominant_question", ""),
             tensions=[Tension.from_dict(t) for t in d.get("tensions", [])],
+            status=d.get("status", ""),
+        )
+
+
+@dataclass
+class PaperBelief:
+    """A paper's core belief about problem structure — worldview-driven phase foundation.
+
+    Represents ONE paper's conviction about HOW its problem should be solved.
+    Extracted from claims by LLM with strict constraints (falsifiability, opposite test).
+    """
+    paper_title: str             # Full paper title
+    belief: str                  # One-sentence core conviction
+    year: int                    # Publication year
+    month: int = 0               # Publication month
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PaperBelief":
+        return cls(
+            paper_title=d.get("paper_title", ""),
+            belief=d.get("belief", ""),
+            year=d.get("year", 0),
+            month=d.get("month", 0),
+        )
+
+
+@dataclass
+class WorldviewGroup:
+    """A group of papers that share the same core belief about problem structure.
+
+    Emerges deterministically from pairwise boundary detection: consecutive
+    same_worldview judgments form a chain → chain is a WorldviewGroup.
+    """
+    papers: list[str]            # Paper titles in this group (sorted by time)
+    core_belief: str             # The shared worldview (1 sentence)
+    time_range: str              # e.g. "2020-08—2022-11"
+    year_start: int = 0
+    month_start: int = 0
+    year_end: int = 0
+    month_end: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "WorldviewGroup":
+        return cls(
+            papers=d.get("papers", []),
+            core_belief=d.get("core_belief", ""),
+            time_range=d.get("time_range", ""),
+            year_start=d.get("year_start", 0),
+            month_start=d.get("month_start", 0),
+            year_end=d.get("year_end", 0),
+            month_end=d.get("month_end", 0),
         )
 
 

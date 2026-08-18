@@ -16,6 +16,7 @@ Flow:
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import time
@@ -28,14 +29,15 @@ from paper import Paper, Claim, Phase
 from claim_extractor import extract_claims
 from narrative_builder import build_narrative
 from claim_relation_builder import build_paper_chain_relations
-from tension_detector import (
-    detect_all_tensions, merge_tensions_into_phases,
+from worldview_phase_detector import (
+    detect_worldview_phases,
     tensions_to_markdown, phases_to_markdown,
 )
 from paradigm_shift_detector import detect_paradigm_shifts, shifts_to_markdown
 from research_question_detector import detect_research_questions
 from llm_analyzer import build_analyzer_client
-from paper_resolver import _fetch_arxiv_metadata, _fetch_ss_metadata_by_arxiv, _extract_arxiv_id
+from paper_resolver import _fetch_arxiv_metadata, _fetch_ss_metadata_by_arxiv, _extract_arxiv_id, _download_arxiv_pdf
+from text_extractor import extract_text_from_pdf
 
 # ── 12 MVP papers ─────────────────────────────────────────────────────
 MVP_PAPERS = [
@@ -53,9 +55,10 @@ MVP_PAPERS = [
     {"arxiv_id": "2405.19620", "title": "SparseDrive"},
 ]
 
-def main():
+def main(narrative_first: bool = False):
+    mode_str = " [NARRATIVE-FIRST]" if narrative_first else ""
     print("=" * 60)
-    print("  MVP: BEV Perception Evolution Narrative")
+    print(f"  MVP: BEV Perception Evolution Narrative{mode_str}")
     print("=" * 60)
 
     # ── Build LLM client ──
@@ -116,6 +119,23 @@ def main():
         papers.append(paper)
         status = "OK" if paper.abstract else "NO ABSTRACT"
         print(f"  [{i + 1}/{len(MVP_PAPERS)}] {paper.title[:50]} — {status}")
+
+    # ── Download PDFs + extract full text (if cached, skip download) ──
+    print(f"\n[2b/4] Extracting full text from PDFs...")
+    for i, paper in enumerate(papers):
+        if paper.arxiv_id:
+            pdf_path = _download_arxiv_pdf(paper.arxiv_id)
+            if pdf_path:
+                try:
+                    full_text = extract_text_from_pdf(str(pdf_path))
+                    paper.full_text = full_text
+                    print(f"  [{i + 1}/{len(papers)}] {paper.title[:50]} — {len(full_text):,} chars")
+                except Exception as exc:
+                    print(f"  [{i + 1}/{len(papers)}] {paper.title[:50]} — FAIL: {exc}")
+            else:
+                print(f"  [{i + 1}/{len(papers)}] {paper.title[:50]} — PDF unavailable")
+        else:
+            print(f"  [{i + 1}/{len(papers)}] {paper.title[:50]} — no arxiv_id")
 
     # ── Phase 2: Extract claims ──
     print(f"\n[3/7] Extracting claims from {len(papers)} papers...")
@@ -178,40 +198,41 @@ def main():
         rq_tensions = []
         research_questions = []
 
-    # ── Phase 3.6: Two-stage tension -> phase detection (V8) ──
-    print(f"\n[4.6] Stage 1: Detecting ALL tensions (no limit)...")
-    all_tensions = detect_all_tensions(
+    # ── Phase 3.6: Shift-driven phase detection ──
+    # Pipeline: beliefs → pairwise boundaries → deterministic groups → phases
+    print(f"\n[4.6] Detecting shift-driven phases...")
+    phases, _, _, _, field_narrative = detect_worldview_phases(
         claims=all_claims,
-        relations=all_relations,
         field_name="BEV Perception",
         client=client,
+        relations=all_relations,
+        tensions=rq_tensions,
+        narrative_first=narrative_first,
+        rqs=research_questions if narrative_first else None,
     )
-    if all_tensions:
-        print(f"  Detected {len(all_tensions)} tensions (Stage 1, fine-grained):")
-        for t in all_tensions:
-            print(f"    [{t.dimension}] {t.tension} — {t.status}")
-    else:
-        print("  WARNING: Stage 1 tension detection failed, using RQ-nested tensions")
-        all_tensions = rq_tensions or []
-
-    print(f"\n[4.7] Stage 2: Merging tensions into phases...")
-    phases = None
-    if all_tensions:
-        phases = merge_tensions_into_phases(
-            tensions=all_tensions,
-            claims=all_claims,
-            field_name="BEV Perception",
-            client=client,
-        )
+    if narrative_first and field_narrative:
+        # Will save narrative after output_dir is created
+        pass
     if phases:
-        print(f"  Merged into {len(phases)} phases:")
+        print(f"\n  Final: {len(phases)} phases")
+        all_phase_tensions = []
         for i, p in enumerate(phases):
-            print(f"    Phase {i + 1}: {p.name} ({p.time_range})")
-            print(f"      Core contradiction: {p.core_contradiction[:100]}...")
-            print(f"      Unresolved: {p.unresolved_problem[:100]}...")
-            print(f"      Papers: {', '.join(p.key_papers[:4])}")
+            t_count = len(p.tensions)
+            all_phase_tensions.extend(p.tensions)
+            print(f"    Phase {i + 1}: {p.name} ({p.time_range}) [{p.status}]")
+            print(f"      Dominant question: {p.dominant_question[:120]}...")
+            print(f"      Core contradiction: {p.core_contradiction[:120]}...")
+            print(f"      Unresolved: {p.unresolved_problem[:120]}...")
+            print(f"      Key papers: {', '.join(p.key_papers[:4])}")
+            if t_count:
+                print(f"      Tensions ({t_count}):")
+                for t in p.tensions:
+                    print(f"        - {t.tension}: {t.description[:80]}...")
+        all_tensions = all_phase_tensions
+        print(f"  Total phase-internal tensions: {len(all_tensions)}")
     else:
-        print("  WARNING: Phase merging failed, narrative will fall back to RQ-based")
+        print("  WARNING: Shift-driven phase detection failed, falling back to RQ-based")
+        all_tensions = rq_tensions or []
 
     # ── Phase 3.7: Detect paradigm shifts ──
     print(f"\n[4.8] Detecting paradigm shifts...")
@@ -263,6 +284,12 @@ def main():
         run_num = 1
     output_dir = output_root / f"v8_mvp_{run_num:03d}"
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save field narrative (narrative-first mode)
+    if narrative_first and field_narrative:
+        narrative_path = output_dir / "field_narrative.txt"
+        narrative_path.write_text(field_narrative, encoding="utf-8")
+        print(f"Field narrative saved: {narrative_path}")
 
     # Save full data
     data_path = output_dir / "narrative.json"
@@ -524,4 +551,8 @@ def _render_markdown(narrative, all_claims, tensions=None, paradigm_shifts=None,
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="MVP BEV Evolution Narrative")
+    parser.add_argument("--narrative-first", action="store_true",
+                        help="Generate field narrative first, then extract shifts from it")
+    args = parser.parse_args()
+    main(narrative_first=args.narrative_first)
